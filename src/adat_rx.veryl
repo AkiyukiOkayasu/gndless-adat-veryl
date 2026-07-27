@@ -1,0 +1,846 @@
+import Adat::AdatFamily;
+
+/// ADATレシーバ トップモジュール
+///
+/// ADAT光入力から8チャンネル24ビットPCMをデコードする。
+/// クロックはADAT信号から自動復元される（外部PLLは不要）。
+///
+/// # 対応サンプルレート
+/// - 48kHz: 8チャンネル
+/// - 96kHz: 4チャンネル (S/MUX2)
+/// - 192kHz: 2チャンネル (S/MUX4)
+///
+/// # S/MUX時のチャンネルマッピング（利用側で実装）
+/// 本モジュールは `channels[8]` を物理スロットとして出力し、S/MUXの論理チャンネル再構成は行わない。
+///
+/// - S/MUX2 (96kHz / 88.2kHz, 4ch)
+///   - Logical CH0 <= `channels[0]` + `channels[1]`
+///   - Logical CH1 <= `channels[2]` + `channels[3]`
+///   - Logical CH2 <= `channels[4]` + `channels[5]`
+///   - Logical CH3 <= `channels[6]` + `channels[7]`
+/// - S/MUX4 (192kHz / 176.4kHz, 2ch)
+///   - Logical CH0 <= `channels[0]` + `channels[1]` + `channels[2]` + `channels[3]`
+///   - Logical CH1 <= `channels[4]` + `channels[5]` + `channels[6]` + `channels[7]`
+///
+/// 時間順は、各Logical CH内では添字の小さいスロットが先のサンプル。
+///
+/// # ADATフレーム構造 (256 bits @ 48kHz = 20.83us)
+///
+/// 5ビットニブル単位で構成。各ニブル: [4bit data][1bit separator=1]
+///
+/// ## シリアル伝送順とビット有意性の定義
+/// - シリアル伝送順: フレーム先頭から順方向（`build_frame[255]` → `build_frame[0]`）。
+/// - 5bitニブルの伝送順: `D23..D20` のように data部は MSB-first。
+/// - PCM 24bit語のビット有意性: `channels[x][23]` がMSB、`channels[x][0]` がLSB。
+/// - したがって nibble 列 `D23..D20, D19..D16, ... D3..D0` は
+///   `23:20, 19:16, ... 3:0` にそのまま対応する。
+///
+/// ```wavedrom
+/// {
+///   signal: [
+///     {
+///       name: 'Field',
+///       wave: 'x3.........45...46...46...46...46...46...46...47...47...47...47...47...47...48...48...48...48...48...48...49...49...49...49...49...49...46...46...46...46...46...46...47...47...47...47...47...47...48...48...48...48...48...48...49...49...49...49...49...49...4x',
+///       data: [
+///         'SYNC', 'spr',
+///         'UserBit', 'spr',
+///         'CH0 nibble0', 'spr',
+///         'CH0 nibble1', 'spr',
+///         'CH0 nibble2', 'spr',
+///         'CH0 nibble3', 'spr',
+///         'CH0 nibble4', 'spr',
+///         'CH0 nibble5', 'spr',
+///         'CH1 nibble0', 'spr',
+///         'CH1 nibble1', 'spr',
+///         'CH1 nibble2', 'spr',
+///         'CH1 nibble3', 'spr',
+///         'CH1 nibble4', 'spr',
+///         'CH1 nibble5', 'spr',
+///         'CH2 nibble0', 'spr',
+///         'CH2 nibble1', 'spr',
+///         'CH2 nibble2', 'spr',
+///         'CH2 nibble3', 'spr',
+///         'CH2 nibble4', 'spr',
+///         'CH2 nibble5', 'spr',
+///         'CH3 nibble0', 'spr',
+///         'CH3 nibble1', 'spr',
+///         'CH3 nibble2', 'spr',
+///         'CH3 nibble3', 'spr',
+///         'CH3 nibble4', 'spr',
+///         'CH3 nibble5', 'spr',
+///         'CH4 nibble0', 'spr',
+///         'CH4 nibble1', 'spr',
+///         'CH4 nibble2', 'spr',
+///         'CH4 nibble3', 'spr',
+///         'CH4 nibble4', 'spr',
+///         'CH4 nibble5', 'spr',
+///         'CH5 nibble0', 'spr',
+///         'CH5 nibble1', 'spr',
+///         'CH5 nibble2', 'spr',
+///         'CH5 nibble3', 'spr',
+///         'CH5 nibble4', 'spr',
+///         'CH5 nibble5', 'spr',
+///         'CH6 nibble0', 'spr',
+///         'CH6 nibble1', 'spr',
+///         'CH6 nibble2', 'spr',
+///         'CH6 nibble3', 'spr',
+///         'CH6 nibble4', 'spr',
+///         'CH6 nibble5', 'spr',
+///         'CH7 nibble0', 'spr',
+///         'CH7 nibble1', 'spr',
+///         'CH7 nibble2', 'spr',
+///         'CH7 nibble3', 'spr',
+///         'CH7 nibble4', 'spr',
+///         'CH7 nibble5', 'spr',
+///       ]
+///     },
+///     {
+///       name: 'ADAT in',
+///       wave: '10.........1====1====1====1====1====1====1====1====1====1====1====1====1====1====1====1====1====1====1====1====1====1====1====1====1====1====1====1====1====1====1====1====1====1====1====1====1====1====1====1====1====1====1====1====1====1====1====1====1====1x',
+///       data: [
+///         'U3', 'U2', 'U1', 'U0',
+///         'D23', 'D22', 'D21', 'D20',
+///         'D19', 'D18', 'D17', 'D16',
+///         'D15', 'D14', 'D13', 'D12',
+///         'D11', 'D10', 'D9', 'D8',
+///         'D7', 'D6', 'D5', 'D4',
+///         'D3', 'D2', 'D1', 'D0',
+///         'D23', 'D22', 'D21', 'D20',
+///         'D19', 'D18', 'D17', 'D16',
+///         'D15', 'D14', 'D13', 'D12',
+///         'D11', 'D10', 'D9', 'D8',
+///         'D7', 'D6', 'D5', 'D4',
+///         'D3', 'D2', 'D1', 'D0',
+///         'D23', 'D22', 'D21', 'D20',
+///         'D19', 'D18', 'D17', 'D16',
+///         'D15', 'D14', 'D13', 'D12',
+///         'D11', 'D10', 'D9', 'D8',
+///         'D7', 'D6', 'D5', 'D4',
+///         'D3', 'D2', 'D1', 'D0',
+///         'D23', 'D22', 'D21', 'D20',
+///         'D19', 'D18', 'D17', 'D16',
+///         'D15', 'D14', 'D13', 'D12',
+///         'D11', 'D10', 'D9', 'D8',
+///         'D7', 'D6', 'D5', 'D4',
+///         'D3', 'D2', 'D1', 'D0',
+///         'D23', 'D22', 'D21', 'D20',
+///         'D19', 'D18', 'D17', 'D16',
+///         'D15', 'D14', 'D13', 'D12',
+///         'D11', 'D10', 'D9', 'D8',
+///         'D7', 'D6', 'D5', 'D4',
+///         'D3', 'D2', 'D1', 'D0',
+///         'D23', 'D22', 'D21', 'D20',
+///         'D19', 'D18', 'D17', 'D16',
+///         'D15', 'D14', 'D13', 'D12',
+///         'D11', 'D10', 'D9', 'D8',
+///         'D7', 'D6', 'D5', 'D4',
+///         'D3', 'D2', 'D1', 'D0',
+///         'D23', 'D22', 'D21', 'D20',
+///         'D19', 'D18', 'D17', 'D16',
+///         'D15', 'D14', 'D13', 'D12',
+///         'D11', 'D10', 'D9', 'D8',
+///         'D7', 'D6', 'D5', 'D4',
+///         'D3', 'D2', 'D1', 'D0',
+///         'D23', 'D22', 'D21', 'D20',
+///         'D19', 'D18', 'D17', 'D16',
+///         'D15', 'D14', 'D13', 'D12',
+///         'D11', 'D10', 'D9', 'D8',
+///         'D7', 'D6', 'D5', 'D4',
+///         'D3', 'D2', 'D1', 'D0'
+///       ]
+///     }
+///   ],
+///   head: { text: 'ADAT frame', tick: -1, every: 5 }
+/// }
+/// ```
+///
+/// ## 詳細構成（5ビットニブル単位）
+///
+/// | ビット | 内容 | 説明 |
+/// |--------|------|------|
+/// | 0-10 | 0000000000 + 1 | SYNC: 10ビットの0（NRZIで無遷移） + separator=1|
+/// | 11-15 | U3-U0 + 1 | User nibble: User bits[3:0] + separator|
+/// | 16-20 | D23-D20 + 1 | CH0 nibble0: audio[23:20] + separator |
+/// | 21-25 | D19-D16 + 1 | CH0 nibble1: audio[19:16] + separator |
+/// | 26-30 | D15-D12 + 1 | CH0 nibble2: audio[15:12] + separator |
+/// | 31-35 | D11-D8 + 1 | CH0 nibble3: audio[11:8] + separator |
+/// | 36-40 | D7-D4 + 1 | CH0 nibble4: audio[7:4] + separator |
+/// | 41-45 | D3-D0 + 1 | CH0 nibble5: audio[3:0] + separator |
+/// | 46-75 | ... | CH1 (上記と同じ6 nibbles) |
+/// | ... | ... | CH2-CH7 (各30ビット) |
+///
+/// ## セパレーターの役割
+/// - 各5ビットニブルの最後に「1」が配置される
+/// - これによりNRZIエンコーディングで必ず遷移が発生
+/// - 最大5ビット連続で無遷移になるのを防ぎ、同期を維持
+///
+/// # 使用例
+/// ```veryl
+/// inst adat: AdatRx (
+///     clk        : sys_clk_50mhz,
+///     rst        : reset,
+///     adat       : toslink_in,
+///     channels   : audio,
+///     frame_clk  : frame_clk,
+///     smux_active: smux_active,
+///     valid      : valid,
+///     locked     : locked,
+/// );
+/// ```
+///
+/// # タイミング
+/// - 推奨クロック: 50MHz
+/// - ADAT入力: TOSLINK光→電気変換済み信号
+pub module AdatRx (
+    /// システムクロック (50MHz推奨)
+    clk: input clock,
+    rst: input reset,
+    /// ADAT入力 (光→電気変換済み)
+    adat: input logic,
+    /// ADATフレーム周期のクロック出力（sample rateではない）
+    /// 通常は44.1/48kHz。
+    /// warning: S/MUX有効時でも44.1kHz/48kHzが出力されることに注意
+    frame_clk: output logic,
+    /// UserBit2に基づいて検出されたS/MUX有効状態 (1: enabled, 0: disabled)
+    /// warning: S/MUX2とS/MUX4の判別は原理的に不可能なので、あくまでS/MUXが有効or無効のみを示す
+    smux_active: output bbool,
+    /// 8チャンネルPCMデータ出力（ADAT物理スロット）
+    /// warning: S/MUX有効時の論理チャンネル再構成は利用側の実装が必要
+    channels: output logic<24> [8],
+    /// データ有効信号
+    valid: output logic,
+    /// 同期ロック状態
+    locked: output bbool,
+) {
+    // 内部信号
+    var adat_edge  : logic    ;
+    var synced     : logic    ;
+    var edge_time  : logic<12>;
+    var sync_detect: logic    ;
+    var frame_time : logic<12>;
+
+    var bits      : logic<5> ;
+    var bit_count : logic<3> ;
+    var bits_valid: logic    ;
+    var pcm_data  : logic<24>;
+    var channel   : logic<3> ;
+    var data_valid: logic    ;
+
+    // 非同期ADAT入力の同期化
+    inst u_sync: $std::synchronizer_basic (
+        i_clk: clk   ,
+        i_rst: rst   ,
+        i_d  : adat  ,
+        o_d  : synced,
+    );
+
+    // エッジ検出
+    inst u_edge_detector: $std::edge_detector (
+        i_clk    : clk      ,
+        i_rst    : rst      ,
+        i_clear  : 0        ,
+        i_data   : synced   ,
+        o_edge   : adat_edge,
+        o_posedge: _        ,
+        o_negedge: _        ,
+    );
+
+    // タイミング追跡モジュール
+    inst u_timing_tracker: TimingTracker (
+        clk        : clk        ,
+        rst        : rst        ,
+        edge_pulse : adat_edge  ,
+        edge_time  : edge_time  ,
+        sync_detect: sync_detect,
+        frame_time : frame_time ,
+    );
+
+    // ビットデコーダ入力を1サイクル遅延
+    var edge_delay: logic;
+    inst u_delay_edge: $std::delay (
+        i_clk: clk       ,
+        i_rst: rst       ,
+        i_d  : adat_edge ,
+        o_d  : edge_delay,
+    );
+
+    // ビットデコーダモジュール
+    inst u_bit_decoder: BitDecoder (
+        clk       : clk        ,
+        rst       : rst        ,
+        edge_pulse: edge_delay ,
+        edge_time : edge_time  ,
+        frame_time: frame_time ,
+        sync_mask : sync_detect,
+        bits      : bits       ,
+        bit_count : bit_count  ,
+        valid     : bits_valid ,
+    );
+
+    // UserBits出力信号
+    var user_bits: logic<4>;
+
+    // フレームパーサモジュール
+    inst u_frame_parser: FrameParser (
+        clk       : clk        ,
+        rst       : rst        ,
+        bits      : bits       ,
+        bit_count : bit_count  ,
+        valid     : bits_valid ,
+        sync      : sync_detect,
+        user_bits : user_bits  ,
+        data      : pcm_data   ,
+        channel   : channel    ,
+        data_valid: data_valid ,
+    );
+
+    // 出力インターフェースモジュール
+    inst u_output_interface: OutputInterface (
+        clk        : clk        ,
+        rst        : rst        ,
+        frame_time : frame_time ,
+        data       : pcm_data   ,
+        channel    : channel    ,
+        data_valid : data_valid ,
+        sync       : sync_detect,
+        user_bits  : user_bits  ,
+        smux_active: smux_active,
+        frame_clk  : frame_clk  ,
+        channels   : channels   ,
+        valid      : valid      ,
+        locked     : locked     ,
+    );
+}
+
+/// ADAT内部コアのVeryl Nativeテスト。
+#[test(test_adat_timing_tracker)]
+module test_adat_timing_tracker {
+    inst clk: $tb::clock_gen;
+    inst rst: $tb::reset_gen ( clk );
+
+    var edge_pulse : logic    ;
+    var edge_time  : logic<12>;
+    var sync_detect: logic    ;
+    var frame_time : logic<12>;
+
+    inst dut: TimingTracker ( clk, rst, edge_pulse, edge_time, sync_detect, frame_time );
+
+    function pulse_edge (
+        gap_cycles: input logic<12>,
+    ) {
+        edge_pulse = 1'b0;
+        clk.next(gap_cycles);
+        edge_pulse = 1'b1;
+        clk.next(1);
+        edge_pulse = 1'b0;
+    }
+
+    initial {
+        edge_pulse = 1'b0;
+        rst.assert();
+
+        // 短いエッジ間隔はデータ期間として扱う。
+        pulse_edge(12'd4);
+        $assert(sync_detect == 1'b1, "short interval should be data");
+
+        // 長いエッジ間隔はSYNC期間として扱う。
+        pulse_edge(12'd40);
+        $assert(sync_detect == 1'b0, "long interval should be sync");
+
+        // SYNC後にデータ期間へ復帰する。
+        pulse_edge(12'd4);
+        $assert(sync_detect == 1'b1, "data should resume after sync");
+        $assert(frame_time == 12'd1042, "initial frame time should be 1042");
+
+        $finish();
+    }
+}
+
+#[test(test_adat_bit_decoder)]
+module test_adat_bit_decoder {
+    inst clk: $tb::clock_gen;
+    inst rst: $tb::reset_gen ( clk );
+
+    var edge_pulse: logic    ;
+    var edge_time : logic<12>;
+    var frame_time: logic<12>;
+    var sync_mask : logic    ;
+    var bits      : logic<5> ;
+    var bit_count : logic<3> ;
+    var valid     : logic    ;
+
+    inst dut: BitDecoder ( clk, rst, edge_pulse, edge_time, frame_time, sync_mask, bits, bit_count, valid );
+
+    function trigger_edge (
+        interval: input logic<12>,
+    ) {
+        edge_time  = interval;
+        edge_pulse = 1'b1;
+        clk.next(1);
+        edge_pulse = 1'b0;
+    }
+
+    initial {
+        edge_pulse = 1'b0;
+        edge_time  = 12'd0;
+        frame_time = 12'd2048;
+        sync_mask  = 1'b1;
+        rst.assert();
+
+        trigger_edge(12'd1);
+        $assert(valid == 1'b1, "one-bit decode should be valid");
+        $assert(bit_count == 3'd1, "one-bit decode count mismatch");
+        $assert(bits == 5'b00001, "one-bit decode value mismatch");
+
+        trigger_edge(12'd16);
+        $assert(bit_count == 3'd2, "two-bit decode count mismatch");
+        $assert(bits == 5'b00010, "two-bit decode value mismatch");
+
+        trigger_edge(12'd40);
+        $assert(bit_count == 3'd5, "five-bit decode count mismatch");
+        $assert(bits == 5'b10000, "five-bit decode value mismatch");
+
+        sync_mask = 1'b0;
+        trigger_edge(12'd1);
+        $assert(valid == 1'b0, "sync interval should not emit data");
+
+        $finish();
+    }
+}
+
+#[test(test_adat_frame_parser)]
+module test_adat_frame_parser {
+    inst clk: $tb::clock_gen;
+    inst rst: $tb::reset_gen ( clk );
+
+    var bits      : logic<5> ;
+    var bit_count : logic<3> ;
+    var valid     : logic    ;
+    var sync      : logic    ;
+    var user_bits : logic<4> ;
+    var data      : logic<24>;
+    var channel   : logic<3> ;
+    var data_valid: logic    ;
+
+    inst dut: FrameParser (
+        clk       : clk       ,
+        rst       : rst       ,
+        bits      : bits      ,
+        bit_count : bit_count ,
+        valid     : valid     ,
+        sync      : sync      ,
+        user_bits : user_bits ,
+        data      : data      ,
+        channel   : channel   ,
+        data_valid: data_valid,
+    );
+
+    function push_bits (
+        value: input logic<5>,
+        count: input logic<3>,
+    ) {
+        bits      = value;
+        bit_count = count;
+        valid     = 1'b1;
+        clk.next(1);
+        valid = 1'b0;
+    }
+
+    function push_channel_123456 () {
+        push_bits(5'b11000, 3'd5);
+        push_bits(5'b10100, 3'd5);
+        push_bits(5'b11100, 3'd5);
+        push_bits(5'b10010, 3'd5);
+        push_bits(5'b11010, 3'd5);
+        push_bits(5'b10110, 3'd5);
+    }
+
+    initial {
+        bits      = 5'd0;
+        bit_count = 3'd0;
+        valid     = 1'b0;
+        sync      = 1'b1;
+        rst.assert();
+
+        // User=0xA。先頭のseparatorを含む反転済み入力。
+        push_bits(5'b10101, 3'd5);
+        $assert(user_bits == 4'hA, "user bits mismatch");
+
+        // 同じPCM値を全8チャンネルへ送り、チャンネル抽出と番号を検証する。
+        for i in 0..8 {
+            push_channel_123456();
+            $assert(data_valid == 1'b1, "channel data should be valid");
+            $assert(channel == (i as 3), "channel index mismatch");
+            $assert(data == 24'h123456, "PCM data mismatch");
+        }
+
+        $finish();
+    }
+}
+
+#[test(test_adat_tx_frame_builder)]
+module test_adat_tx_frame_builder {
+    inst clk: $tb::clock_gen;
+    inst rst: $tb::reset_gen ( clk );
+
+    var channels : logic<24>  [8];
+    var user_bits: logic<4>      ;
+    var build    : logic         ;
+    var frame    : logic<256>    ;
+    var ready    : logic         ;
+
+    inst dut: TxFrameBuilder ( clk, rst, channels, user_bits, build, frame, ready );
+
+    initial {
+        channels[0] = 24'h123456;
+        channels[1] = 24'h789ABC;
+        channels[2] = 24'hDEF012;
+        channels[3] = 24'h345678;
+        channels[4] = 24'h9ABCDE;
+        channels[5] = 24'hF01234;
+        channels[6] = 24'h567890;
+        channels[7] = 24'hABCDEF;
+        user_bits   = 4'hA;
+        build       = 1'b0;
+        rst.assert();
+
+        build = 1'b1;
+        clk.next(1);
+        build = 1'b0;
+
+        $assert(ready == 1'b1, "frame builder should pulse ready");
+        $assert(frame[255:246] == 10'b0000000000, "SYNC zero field mismatch");
+        $assert(frame[245] == 1'b1, "SYNC separator mismatch");
+        $assert(frame[244:241] == 4'hA, "user field mismatch");
+        $assert(frame[240] == 1'b1, "user separator mismatch");
+        $assert(
+            frame[239:210] == {4'h1, 1'b1, 4'h2, 1'b1, 4'h3, 1'b1, 4'h4, 1'b1, 4'h5, 1'b1, 4'h6, 1'b1},
+            "CH0 frame encoding mismatch",
+        );
+        $assert(
+            frame[209:180] == {4'h7, 1'b1, 4'h8, 1'b1, 4'h9, 1'b1, 4'hA, 1'b1, 4'hB, 1'b1, 4'hC, 1'b1},
+            "CH1 frame encoding mismatch",
+        );
+        $assert(
+            frame[179:150] == {4'hD, 1'b1, 4'hE, 1'b1, 4'hF, 1'b1, 4'h0, 1'b1, 4'h1, 1'b1, 4'h2, 1'b1},
+            "CH2 frame encoding mismatch",
+        );
+        $assert(
+            frame[149:120] == {4'h3, 1'b1, 4'h4, 1'b1, 4'h5, 1'b1, 4'h6, 1'b1, 4'h7, 1'b1, 4'h8, 1'b1},
+            "CH3 frame encoding mismatch",
+        );
+        $assert(
+            frame[119:90] == {4'h9, 1'b1, 4'hA, 1'b1, 4'hB, 1'b1, 4'hC, 1'b1, 4'hD, 1'b1, 4'hE, 1'b1},
+            "CH4 frame encoding mismatch",
+        );
+        $assert(
+            frame[89:60] == {4'hF, 1'b1, 4'h0, 1'b1, 4'h1, 1'b1, 4'h2, 1'b1, 4'h3, 1'b1, 4'h4, 1'b1},
+            "CH5 frame encoding mismatch",
+        );
+        $assert(
+            frame[59:30] == {4'h5, 1'b1, 4'h6, 1'b1, 4'h7, 1'b1, 4'h8, 1'b1, 4'h9, 1'b1, 4'h0, 1'b1},
+            "CH6 frame encoding mismatch",
+        );
+        $assert(
+            frame[29:0] == {4'hA, 1'b1, 4'hB, 1'b1, 4'hC, 1'b1, 4'hD, 1'b1, 4'hE, 1'b1, 4'hF, 1'b1},
+            "CH7 frame encoding mismatch",
+        );
+
+        clk.next(1);
+        $assert(ready == 1'b0, "ready should be a one-cycle pulse");
+        $finish();
+    }
+}
+
+#[test(test_adat_tx_nrzi_encoder)]
+module test_adat_tx_nrzi_encoder {
+    inst clk: $tb::clock_gen;
+    inst rst: $tb::reset_gen ( clk );
+
+    var serial_bit: logic;
+    var valid     : logic;
+    var nrzi      : logic;
+
+    inst dut: TxNrziEncoder ( clk, rst, serial_bit, valid, nrzi );
+
+    function send_bit (
+        value: input logic,
+    ) {
+        serial_bit = value;
+        valid      = 1'b1;
+        clk.next(1);
+        valid = 1'b0;
+        clk.next(1);
+    }
+
+    initial {
+        serial_bit = 1'b0;
+        valid      = 1'b0;
+        rst.assert();
+        $assert(nrzi == 1'b0, "NRZI reset level mismatch");
+
+        send_bit(1'b1);
+        $assert(nrzi == 1'b1, "NRZI one should toggle");
+        send_bit(1'b0);
+        $assert(nrzi == 1'b1, "NRZI zero should hold");
+        send_bit(1'b1);
+        $assert(nrzi == 1'b0, "NRZI second one should toggle");
+
+        $finish();
+    }
+}
+
+#[test(test_adat_tx_bit_serializer)]
+module test_adat_tx_bit_serializer {
+    inst clk: $tb::clock_gen;
+    inst rst: $tb::reset_gen ( clk );
+
+    var frame     : logic     <256>;
+    var load      : logic          ;
+    var family    : AdatFamily     ;
+    var serial_bit: logic          ;
+    var bit_valid : logic          ;
+    var frame_done: logic          ;
+    var bit_count : logic     <9>  ;
+    var first_bit : logic          ;
+    var last_bit  : logic          ;
+    var done_seen : logic          ;
+
+    inst dut: TxBitSerializer #(
+        CLK_FREQ: 50_000_000,
+    ) (
+        clk         ,
+        rst         ,
+        frame       ,
+        load        ,
+        family      ,
+        serial_bit  ,
+        bit_valid   ,
+        frame_done  ,
+    );
+
+    always_ff (clk, rst) {
+        if_reset {
+            bit_count = 0;
+            first_bit = 0;
+            last_bit  = 0;
+            done_seen = 0;
+        } else {
+            if bit_valid {
+                if bit_count == 0 {
+                    first_bit = serial_bit;
+                }
+                last_bit  = serial_bit;
+                bit_count = bit_count + 1;
+            }
+            if frame_done {
+                done_seen = 1;
+            }
+        }
+    }
+
+    initial {
+        frame  = {1'b1, 254'd0, 1'b1};
+        load   = 1'b0;
+        family = AdatFamily::F48K;
+        rst.assert();
+        clk.next(10);
+
+        load = 1'b1;
+        clk.next(1);
+        load = 1'b0;
+        // 256bit / 12.288Mbps at 50MHz is about 1042 clocks。
+        clk.next(1200);
+
+        $assert(bit_count == 9'd256, "serializer bit count mismatch");
+        $assert(first_bit == 1'b1, "serializer MSB order mismatch");
+        $assert(last_bit == 1'b1, "serializer LSB order mismatch");
+        $assert(done_seen == 1'b1, "serializer frame_done was not observed");
+        $finish();
+    }
+}
+
+#[test(test_adat_output_interface)]
+module test_adat_output_interface {
+    inst clk: $tb::clock_gen;
+    inst rst: $tb::reset_gen ( clk );
+
+    var frame_time : logic<12>    ;
+    var data       : logic<24>    ;
+    var channel    : logic<3>     ;
+    var data_valid : logic        ;
+    var sync       : logic        ;
+    var user_bits  : logic<4>     ;
+    var smux_active: bbool        ;
+    var frame_clk  : logic        ;
+    var channels   : logic<24> [8];
+    var valid      : logic        ;
+    var locked     : bbool        ;
+
+    inst dut: OutputInterface (
+        clk          ,
+        rst          ,
+        frame_time   ,
+        data         ,
+        channel      ,
+        data_valid   ,
+        sync         ,
+        user_bits    ,
+        smux_active  ,
+        frame_clk    ,
+        channels     ,
+        valid        ,
+        locked       ,
+    );
+
+    function push_channel (
+        index : input logic<3> ,
+        sample: input logic<24>,
+    ) {
+        channel    = index;
+        data       = sample;
+        data_valid = 1'b1;
+        clk.next(1);
+        data_valid = 1'b0;
+    }
+
+    initial {
+        frame_time = 12'd2048;
+        data       = 24'd0;
+        channel    = 3'd0;
+        data_valid = 1'b0;
+        sync       = 1'b1;
+        user_bits  = 4'b0010;
+        rst.assert();
+
+        push_channel(3'd0, 24'h100000);
+        push_channel(3'd1, 24'h200000);
+        push_channel(3'd2, 24'h300000);
+        push_channel(3'd3, 24'h400000);
+        push_channel(3'd4, 24'h500000);
+        push_channel(3'd5, 24'h600000);
+        push_channel(3'd6, 24'h700000);
+        push_channel(3'd7, 24'h7FFFFF);
+
+        $assert(valid == 1'b1, "complete frame should assert valid");
+        $assert(smux_active == 1'b1, "S/MUX flag mismatch");
+        $assert(channels[0] == 24'h100000, "channel 0 data mismatch");
+        $assert(channels[7] == 24'h7FFFFF, "channel 7 data mismatch");
+        $finish();
+    }
+}
+
+#[test(test_adat_loopback)]
+module test_adat_loopback {
+    inst clk: $tb::clock_gen;
+    inst rst: $tb::reset_gen ( clk );
+
+    var frame_clk_tx  : logic        ;
+    var channels_tx   : logic<24> [8];
+    var smux_active_tx: bbool        ;
+    var adat_loopback : logic        ;
+    var frame_done_tx : logic        ;
+
+    var frame_clk_rx  : logic        ;
+    var smux_active_rx: bbool        ;
+    var channels_rx   : logic<24> [8];
+    var valid_rx      : logic        ;
+    var locked_rx     : bbool        ;
+
+    var sent_count      : logic<4>;
+    var valid_count     : logic<4>;
+    var done_count      : logic<4>;
+    var frame_valid_seen: logic   ;
+    var frame_done_seen : logic   ;
+    var locked_seen     : bbool   ;
+    var complete        : logic   ;
+
+    inst tx: AdatTx #(
+        CLK_FREQ   : 50_000_000      ,
+        ADAT_FAMILY: AdatFamily::F48K,
+    ) (
+        clk        : clk           ,
+        rst        : rst           ,
+        frame_clk  : frame_clk_tx  ,
+        channels   : channels_tx   ,
+        smux_active: smux_active_tx,
+        adat       : adat_loopback ,
+        frame_done : frame_done_tx ,
+    );
+
+    inst rx: AdatRx (
+        clk        : clk           ,
+        rst        : rst           ,
+        adat       : adat_loopback ,
+        frame_clk  : frame_clk_rx  ,
+        smux_active: smux_active_rx,
+        channels   : channels_rx   ,
+        valid      : valid_rx      ,
+        locked     : locked_rx     ,
+    );
+
+    // TX完了イベントで次フレームを開始し、RXの完了フレーム数を記録する。
+    always_ff (clk, rst) {
+        if_reset {
+            frame_clk_tx     = 1'b0;
+            smux_active_tx   = 1'b0;
+            channels_tx[0]   = 24'h123456;
+            channels_tx[1]   = 24'h234567;
+            channels_tx[2]   = 24'h345678;
+            channels_tx[3]   = 24'h456789;
+            channels_tx[4]   = 24'h56789A;
+            channels_tx[5]   = 24'h6789AB;
+            channels_tx[6]   = 24'h789ABC;
+            channels_tx[7]   = 24'h89ABCD;
+            sent_count       = 4'd0;
+            valid_count      = 4'd0;
+            done_count       = 4'd0;
+            frame_valid_seen = 1'b0;
+            frame_done_seen  = 1'b0;
+            locked_seen      = 1'b0;
+            complete         = 1'b0;
+        } else {
+            frame_clk_tx = 1'b0;
+
+            // 最初のフレームを開始し、以降はframe_doneを待って開始する。
+            if sent_count == 4'd0 {
+                frame_clk_tx = 1'b1;
+                sent_count   = 4'd1;
+            } else if frame_valid_seen && frame_done_seen && sent_count <: 4'd11 {
+                frame_clk_tx     = 1'b1;
+                sent_count       = sent_count + 4'd1;
+                frame_valid_seen = 1'b0;
+                frame_done_seen  = 1'b0;
+            }
+
+            if valid_rx && valid_count <: 4'd15 {
+                valid_count      = valid_count + 4'd1;
+                frame_valid_seen = 1'b1;
+            }
+            if frame_done_tx && done_count <: 4'd15 {
+                done_count      = done_count + 4'd1;
+                frame_done_seen = 1'b1;
+            }
+            if locked_rx {
+                locked_seen = 1'b1;
+            }
+            if done_count == 4'd11 {
+                complete = 1'b1;
+            }
+        }
+    }
+
+    initial {
+        rst.assert();
+        // 11フレームが完了するまでの上限。送信開始自体はframe_done駆動。
+        clk.next(16_000);
+
+        $assert(complete == 1'b1, "ADAT loopback did not complete");
+        $assert(valid_count == 4'd11, "ADAT loopback valid count mismatch");
+        $assert(locked_seen == 1'b1, "ADAT loopback should lock");
+        $assert(smux_active_rx == 1'b0, "ADAT loopback S/MUX flag mismatch");
+        $assert(channels_rx[0] == 24'h123456, "ADAT loopback CH0 mismatch");
+        $assert(channels_rx[7] == 24'h89ABCD, "ADAT loopback CH7 mismatch");
+        $finish();
+    }
+}
