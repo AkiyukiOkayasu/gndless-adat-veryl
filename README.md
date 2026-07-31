@@ -1,8 +1,8 @@
 # gndless_adat
 
-ADAT opticalの8ch受信・送信とS/MUX2 pack/unpackを所有します。公開APIは`Types::AdatFamily`、`AdatRx`、`AdatTx`、`Smux2Packer`、`Smux2Unpacker`です。内部tracker、decoder、parser、serializerは公開しません。
+ADAT opticalの8ch受信・送信とS/MUX2 pack/unpackのRTL実装です。
 
-依存はVeryl stdのみです。`AdatFamily`は44.1kHz/48kHz family、frameは8ch・30bit符号化です。物理入力の同期化責任は利用者にあり、RXのsync獲得・喪失・再獲得、TXのbit/NRZI順序、S/MUX2 mappingはmodule doc commentとNative testで定義します。clock/resetは同期です。
+依存はVeryl stdのみ。
 
 ## 実機確認状況
 
@@ -25,7 +25,7 @@ bit数           11             5           30                    180           
 ```
 
 | 伝送位置 | 内部ベクタ | 内容 |
-|---:|:---:|---|
+| ---: | :---: | --- |
 | 0–9 | `frame[255:246]` | SYNCの0を10bit |
 | 10 | `frame[245]` | SYNC separator = 1 |
 | 11–14 | `frame[244:241]` | User bit U3→U0 |
@@ -49,7 +49,7 @@ channel内の伝送順 →
     nibble 0      nibble 1      nibble 2      nibble 3      nibble 4      nibble 5
 ```
 
-SYNC以外ではseparatorによってNRZI信号に5bitごとの遷移が生じ、clock recoveryに必要な同期機会が保たれます。SYNCの10bit連続0は、フレーム境界を検出するための意図的な無遷移区間です。`channels[0]`から`channels[7]`はADATの物理スロットです。S/MUX2/S/MUX4での論理channel再構成は`Smux2Packer`、`Smux2Unpacker`または利用側の回路で行います。
+SYNC以外ではseparatorによってNRZI信号に5bitごとの遷移が生じ、clock recoveryに必要な同期機会が保たれます。SYNCの10bit連続0は、フレーム境界を検出するための意図的な無遷移区間です。`channels[0]`から`channels[7]`はADATの物理スロットです。S/MUX2もしくはS/MUX4での論理channel再構成は`Smux2Packer`、`Smux2Unpacker`または利用側の回路で行います。
 
 ```veryl
 inst rx: adat::AdatRx (...);
