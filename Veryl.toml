@@ -11,3 +11,8 @@ sources = ["src"]
 target = { type = "directory", path = "target" }
 
 [test]
+
+[publish]
+register = true
+bump_commit = true
+publish_commit = true
