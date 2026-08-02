@@ -49,11 +49,16 @@ channel内の伝送順 →
     nibble 0      nibble 1      nibble 2      nibble 3      nibble 4      nibble 5
 ```
 
-SYNC以外ではseparatorによってNRZI信号に5bitごとの遷移が生じ、clock recoveryに必要な同期機会が保たれます。SYNCの10bit連続0は、フレーム境界を検出するための意図的な無遷移区間です。`channels[0]`から`channels[7]`はADATの物理スロットです。S/MUX flagは常にS/MUX2として扱い、論理channel再構成は`Smux2Packer`、`Smux2Unpacker`または利用側の回路で行います。ADATストリームからS/MUX4は判別できないため、S/MUX4機器は接続しないでください。
+SYNC以外ではseparatorによってNRZI信号に5bitごとの遷移が生じ、clock recoveryに必要な同期機会が保たれます。SYNCの10bit連続0は、フレーム境界を検出するための意図的な無遷移区間です。`channels[0]`から`channels[7]`はADATの物理スロットです。
+
+### S/MUX
+
+S/MUX flagは常にS/MUX2として扱い、論理channel再構成は`Smux2Packer`、`Smux2Unpacker`または利用側の回路で行います。ADATストリームからS/MUX2かS/MUX4は判別できません。S/MUX4が使われることはほぼないためサポートしません。
+192kHzが必要な場合はAES3とS/PDIF実装がある[gndless-iec60958](https://github.com/AkiyukiOkayasu/gndless-iec60958-veryl)を利用してください。
+
+## Examples
 
 ```veryl
 inst rx: adat::AdatRx (...);
 inst tx: adat::AdatTx (...);
 ```
-
-検証: `veryl fmt && veryl check && veryl test && veryl build && veryl doc`。
