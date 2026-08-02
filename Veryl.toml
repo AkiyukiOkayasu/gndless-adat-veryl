@@ -1,6 +1,6 @@
 [project]
 name = "gndless_adat"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["Akiyuki Okayasu"]
 description = "ADAT optical receive, transmit, and S/MUX2 cores for Veryl."
 license = "MIT OR Apache-2.0"
