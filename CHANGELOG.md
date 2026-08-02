@@ -7,6 +7,9 @@
 - doc commentのsummary、箇条書き、`Examples`見出し、code fence形式を整理
 - 各testへ検証目的を示すdoc commentを追加
 - 公開型packageをproject名と重複する`Adat`から`Types`へ改名
+- `AdatRx`のPCM出力を完全frameのatomic commitへ変更し、公開ストローブを`frame_valid`へ改名
+- Q8周期referenceと32 interval qualificationによるstream lock、rate transition/欠落時の再qualificationを追加
+- ADATストリームから判別できないS/MUX4を非対応とし、`smux_active`は常にS/MUX2として扱うことを明記
 ### Changed
 
 - ADAT RX/TXとS/MUX2を独立packageへ移動
