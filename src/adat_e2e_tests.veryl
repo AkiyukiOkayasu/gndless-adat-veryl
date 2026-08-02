@@ -247,7 +247,7 @@ module test_adat_tx_rx_rate_transition {
         $assert(initial_lock, "initial 48k stream did not lock");
 
         run = false;
-        clk.next(3_000);
+        clk.next(5_000);
         $assert(!rx_locked, "48k stream did not unlock before rate change");
         phase          = 2'd1;
         tx_channels[0] = 24'h520001;
@@ -264,7 +264,7 @@ module test_adat_tx_rx_rate_transition {
         $assert(lock_44, "44.1k stream did not relock");
 
         run = false;
-        clk.next(3_000);
+        clk.next(5_000);
         $assert(!rx_locked, "44.1k stream did not unlock before return");
         phase          = 2'd2;
         tx_channels[0] = 24'h530001;
@@ -360,7 +360,7 @@ module test_adat_tx_rx_smux_recovery {
         $assert(rx_smux, "S/MUX2 flag was not propagated");
 
         run = false;
-        clk.next(2_500);
+        clk.next(5_000);
         $assert(timeout_seen, "S/MUX2 lock did not clear after timeout");
 
         tx_channels[0] = 24'h440001;

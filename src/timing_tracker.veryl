@@ -202,7 +202,9 @@ module test_adat_timing_tracker_gap_recovery {
         $assert(sync_detect == 1'b0, "long interval should be sync before gap");
 
         // 12bitカウンタのwrapを越える停止後も、停止期間を同期として扱う。
-        clk.next(12'd2500);
+        // 4096clkを超えてもcur_timeは飽和し、再開edgeを短周期と誤認しない。
+        clk.next(12'hFFF);
+        clk.next(12'd1000);
         $assert(sync_detect == 1'b0, "input gap must force sync state");
         pulse_edge(12'd1);
         $assert(sync_detect == 1'b0, "first edge after gap must remain sync");
