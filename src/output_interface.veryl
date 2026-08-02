@@ -1,19 +1,23 @@
-/// 出力インターフェース
+/// 完全ADATフレームの出力インターフェース
 ///
-/// S/MUX対応、サンプルレート自動検出、フレームクロック生成を行う
+/// 受信途中のチャンネルをworking bufferへ隔離し、channel 0から7まで
+/// 順序どおりそろった場合だけ8chを一括commitする。S/MUX flagはUser bit
+/// の値をS/MUX2として扱う。ADATストリームからS/MUX4は判別できないため、
+/// S/MUX4の接続は利用側で禁止すること。
 ///
 /// # フレームクロック
 /// ADATフレーム周期のクロック（サンプルクロックではない）。
-/// 通常は44.1/48kHzで、S/MUX有効時のサンプルレートはこの2倍または4倍。フレーム周期の約50%デューティで出力する。
+/// 通常は44.1/48kHzで、S/MUX2有効時の論理sample rateは2倍。フレーム周期の約50%デューティで出力する。
 ///
-/// # valid
-/// `data_valid && channel==7` のとき、`valid` を1サイクルだけアサートする。
-/// これは1フレーム分のPCM（`channel_reg[0..7]`）が更新されたことを示す。
+/// # frame_valid
+/// channel 0から7まで完全な順序で受信・commitしたフレームのうち、
+/// StreamLockQualifierがlockを確定したものだけを1サイクルで通知する。
+/// qualification中、受信途中、チャンネル欠落、順序異常、rate transition中は
+/// `frame_valid=0`となる。
 ///
 /// # locked
-/// 連続する複数フレームが受信できていると判断したときに`locked`をアサートする。
-/// 目安として、リセット解除後に有効なフレーム受信が継続すれば5フレーム以内に1になる。
-/// complete-frame未観測が`frame_time`の約2倍続いた場合はロックを解除する。
+/// 完全フレームの周期安定を確認したときに`locked`をアサートする。
+/// 周期変化、S/MUX2 flag変化、frame欠落では解除し、再qualificationを行う。
 module OutputInterface (
     clk        : input  clock        , /// システムクロック
     rst        : input  reset        , /// リセット
@@ -26,69 +30,64 @@ module OutputInterface (
     smux_active: output bbool        , /// 検出されたS/MUX有効状態 (1: 有効, 0: 無効)
     frame_clk  : output logic        , /// ADATフレーム周期のクロック出力（サンプルクロックではない）
     channels   : output logic<24> [8], /// 8チャンネルPCMデータ出力
-    valid      : output logic        , /// 全チャンネルデータ有効
+    frame_valid: output logic        , /// 完全フレームcommitパルス
     locked     : output bbool        , /// 同期ロック状態
 ) {
     // ワードクロックカウンタ
     var word_clk_cnt: logic<12>;
     // ワードクロック出力
     var word_clk: logic;
-    // チャンネルデータバッファ
-    var channel_reg: logic<24> [8];
-    // 出力有効
-    var valid_out: logic;
-    // ロック状態
-    var locked_reg: bbool;
-    // フレームカウンタ（ロック検出用）
-    var frame_cnt: logic<4>;
-    // complete-frame未観測カウンタ（ロック解除用）
-    var no_frame_cnt: logic<16>;
-    // UserBit由来のS/MUX有効フラグ
-    var smux_active_reg: bbool;
+    // 受信途中のworking bufferと公開済みcommit buffer
+    var working_reg      : logic<24> [8];
+    var channel_reg      : logic<24> [8];
+    var expected_channel : logic<3>     ;
+    var frame_in_progress: logic        ;
+    var candidate_smux   : bbool        ;
+    var committed_smux   : bbool        ;
+    var valid_out        : logic        ;
+    var commit_pending   : logic        ;
+    var timestamp        : logic<16>    ;
+    var lock_reg         : bbool        ;
 
-    // S/MUX有効判定 (ADAT User Bit 2 → user_bits[1])
-    // Note: ここからS/MUX2とS/MUX4の区別はできない
-    assign smux_active_reg = if user_bits[1] ? 1'b1 : 1'b0;
-    assign smux_active     = smux_active_reg;
+    assign smux_active = committed_smux;
 
     assign frame_clk = word_clk;
-    assign valid     = valid_out;
-    assign locked    = locked_reg;
+    // lock確定後のcommitだけを公開し、qualification中・rate transition中の
+    // フレームを下流のaudio resetへ流さない。
+    assign frame_valid = commit_pending && lock_reg;
+    assign locked      = lock_reg;
 
     // チャンネル出力割り当て
     for i in 0..8 :g_ch_out {
         assign channels[i] = channel_reg[i];
     }
 
-    // ロック検出
-    // 数フレーム連続で同期が取れたらロック
+    // 完全frameのcommit eventだけをStreamLockQualifierへ渡す。
+    // timestampはframe_validの間隔を測るための単調なシステムクロック。
     always_ff {
         if_reset {
-            frame_cnt    = 4'd0;
-            locked_reg   = 1'b0;
-            no_frame_cnt = 16'd0;
-        } else if data_valid && channel == 3'd7 {
-            // 最後のチャンネル受信でカウントアップ
-            if frame_cnt <: 4'd15 {
-                frame_cnt = frame_cnt + 4'd1;
-            }
-            if frame_cnt >= 4'd4 {
-                locked_reg = 1'b1;
-            }
-
-            // complete-frame観測でwatchdogリセット
-            no_frame_cnt = 16'd0;
+            timestamp = 16'd0;
         } else {
-            // complete-frameが来ない期間をカウント
-            if no_frame_cnt <: 16'hFFFF {
-                no_frame_cnt = no_frame_cnt + 16'd1;
-            }
+            timestamp = timestamp + 16'd1;
+        }
+    }
 
-            // complete-frame未観測が一定期間続いたらロック解除
-            if no_frame_cnt >: (frame_time << 1) {
-                frame_cnt  = 4'd0;
-                locked_reg = 1'b0;
-            }
+    inst u_stream_lock: StreamLockQualifier (
+        clk        : clk           ,
+        rst        : rst           ,
+        frame_valid: valid_out     ,
+        smux_active: committed_smux,
+        timestamp  : timestamp     ,
+        locked     : lock_reg      ,
+    );
+
+    // qualifierはvalid_outを1クロック遅れて観測するため、同じcommitを
+    // qualified frame_validとして公開する。
+    always_ff {
+        if_reset {
+            commit_pending = 1'b0;
+        } else {
+            commit_pending = valid_out;
         }
     }
 
@@ -111,26 +110,61 @@ module OutputInterface (
         }
     }
 
-    // チャンネルデータ格納
+    // チャンネルデータ格納と完全frameのatomic commit
     always_ff {
         if_reset {
-            channel_reg[0] = 24'd0;
-            channel_reg[1] = 24'd0;
-            channel_reg[2] = 24'd0;
-            channel_reg[3] = 24'd0;
-            channel_reg[4] = 24'd0;
-            channel_reg[5] = 24'd0;
-            channel_reg[6] = 24'd0;
-            channel_reg[7] = 24'd0;
-            valid_out      = 1'b0;
+            working_reg[0]    = 24'd0;
+            working_reg[1]    = 24'd0;
+            working_reg[2]    = 24'd0;
+            working_reg[3]    = 24'd0;
+            working_reg[4]    = 24'd0;
+            working_reg[5]    = 24'd0;
+            working_reg[6]    = 24'd0;
+            working_reg[7]    = 24'd0;
+            channel_reg[0]    = 24'd0;
+            channel_reg[1]    = 24'd0;
+            channel_reg[2]    = 24'd0;
+            channel_reg[3]    = 24'd0;
+            channel_reg[4]    = 24'd0;
+            channel_reg[5]    = 24'd0;
+            channel_reg[6]    = 24'd0;
+            channel_reg[7]    = 24'd0;
+            expected_channel  = 3'd0;
+            frame_in_progress = 1'b0;
+            candidate_smux    = 1'b0;
+            committed_smux    = 1'b0;
+            valid_out         = 1'b0;
         } else if data_valid {
-            // チャンネルデータを格納
-            channel_reg[channel] = data;
-            // 最後のチャンネル(7)受信で1回だけ出力有効
-            if channel == 3'd7 {
-                valid_out = 1'b1;
+            valid_out = 1'b0;
+            if channel == 3'd0 {
+                // channel 0は常に新しいcandidate frameの開始とする。
+                working_reg[0]    = data;
+                expected_channel  = 3'd1;
+                candidate_smux    = if user_bits[1] ? true : false;
+                frame_in_progress = 1'b1;
+            } else if frame_in_progress && channel == expected_channel {
+                if channel == 3'd7 {
+                    // channel 7のpayloadを含め、8chを同じedgeで公開する。
+                    channel_reg[0]    = working_reg[0];
+                    channel_reg[1]    = working_reg[1];
+                    channel_reg[2]    = working_reg[2];
+                    channel_reg[3]    = working_reg[3];
+                    channel_reg[4]    = working_reg[4];
+                    channel_reg[5]    = working_reg[5];
+                    channel_reg[6]    = working_reg[6];
+                    channel_reg[7]    = data;
+                    committed_smux    = candidate_smux;
+                    expected_channel  = 3'd0;
+                    frame_in_progress = 1'b0;
+                    valid_out         = 1'b1;
+                } else {
+                    working_reg[channel] = data;
+                    expected_channel     = expected_channel + 3'd1;
+                }
             } else {
-                valid_out = 1'b0;
+                // 不完全/順序異常candidateは破棄し、次のchannel 0を待つ。
+                expected_channel  = 3'd0;
+                frame_in_progress = 1'b0;
             }
         } else {
             valid_out = 1'b0;
@@ -138,23 +172,24 @@ module OutputInterface (
     }
 }
 
-/// 8channel受信後の一括更新、valid pulse、S/MUX flagを検証
+/// 8channel受信後のatomic commit、frame_valid pulse、S/MUX2 flagを検証
 #[test(test_adat_output_interface)]
 module test_adat_output_interface {
     inst clk: $tb::clock_gen;
     inst rst: $tb::reset_gen ( clk );
 
-    var frame_time : logic<12>    ;
-    var data       : logic<24>    ;
-    var channel    : logic<3>     ;
-    var data_valid : logic        ;
-    var sync       : logic        ;
-    var user_bits  : logic<4>     ;
-    var smux_active: bbool        ;
-    var frame_clk  : logic        ;
-    var channels   : logic<24> [8];
-    var valid      : logic        ;
-    var locked     : bbool        ;
+    var frame_time    : logic<12>    ;
+    var data          : logic<24>    ;
+    var channel       : logic<3>     ;
+    var data_valid    : logic        ;
+    var sync          : logic        ;
+    var user_bits     : logic<4>     ;
+    var smux_active   : bbool        ;
+    var frame_clk     : logic        ;
+    var channels      : logic<24> [8];
+    var frame_valid   : logic        ;
+    var locked        : bbool        ;
+    var qualified_seen: logic        ;
 
     inst dut: OutputInterface (
         clk          ,
@@ -168,7 +203,7 @@ module test_adat_output_interface {
         smux_active  ,
         frame_clk    ,
         channels     ,
-        valid        ,
+        frame_valid  ,
         locked       ,
     );
 
@@ -181,17 +216,43 @@ module test_adat_output_interface {
         data_valid = 1'b1;
         clk.next(1);
         data_valid = 1'b0;
+        if frame_valid {
+            qualified_seen = 1'b1;
+        }
+    }
+
+    function push_frame () {
+        push_channel(3'd0, 24'h100000);
+        push_channel(3'd1, 24'h200000);
+        push_channel(3'd2, 24'h300000);
+        push_channel(3'd3, 24'h400000);
+        push_channel(3'd4, 24'h500000);
+        push_channel(3'd5, 24'h600000);
+        push_channel(3'd6, 24'h700000);
+        push_channel(3'd7, 24'h7FFFFF);
+        if frame_valid {
+            qualified_seen = 1'b1;
+        }
     }
 
     initial {
-        frame_time = 12'd2048;
-        data       = 24'd0;
-        channel    = 3'd0;
-        data_valid = 1'b0;
-        sync       = 1'b1;
-        user_bits  = 4'b0010;
+        frame_time     = 12'd2048;
+        data           = 24'd0;
+        channel        = 3'd0;
+        data_valid     = 1'b0;
+        sync           = 1'b1;
+        user_bits      = 4'b0010;
+        qualified_seen = 1'b0;
         rst.assert();
 
+        // 欠落channelを含むcandidateは公開bufferを更新しない。
+        push_channel(3'd0, 24'hAAAAAA);
+        push_channel(3'd1, 24'hBBBBBB);
+        push_channel(3'd7, 24'hCCCCCC);
+        $assert(frame_valid == 1'b0, "incomplete frame must not assert frame_valid");
+        $assert(channels[0] == 24'd0, "incomplete frame leaked channel 0");
+
+        // 最初の完全frameはatomic commitされるが、qualify完了までは公開しない。
         push_channel(3'd0, 24'h100000);
         push_channel(3'd1, 24'h200000);
         push_channel(3'd2, 24'h300000);
@@ -201,10 +262,18 @@ module test_adat_output_interface {
         push_channel(3'd6, 24'h700000);
         push_channel(3'd7, 24'h7FFFFF);
 
-        $assert(valid == 1'b1, "complete frame should assert valid");
+        $assert(frame_valid == 1'b0, "frame_valid must wait for stream qualification");
         $assert(smux_active == 1'b1, "S/MUX flag mismatch");
         $assert(channels[0] == 24'h100000, "channel 0 data mismatch");
         $assert(channels[7] == 24'h7FFFFF, "channel 7 data mismatch");
+
+        // 32個の安定interval後にqualifierがlockし、qualified frame_validを出す。
+        for _i in 0..34 {
+            push_frame();
+        }
+        clk.next(1);
+        $assert(locked == 1'b1, "stable stream should lock");
+        $assert(qualified_seen == 1'b1, "qualified frame_valid was not observed");
         $finish();
     }
 }

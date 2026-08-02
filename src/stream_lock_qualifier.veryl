@@ -1,0 +1,175 @@
+/// 完全ADATフレームの周期とS/MUX2状態からストリームロックを判定する。
+///
+/// `frame_valid`は、受信側がチャンネル0から7までを順序どおり
+/// commitした1クロックパルスでなければならない。最初の完全フレームは
+/// timestampの基準にのみ使い、その後32個の安定したframe intervalを
+/// 観測してから`locked`をアサートする。周期の許容幅は推定周期の1/64
+/// であり、量子化ジッターと緩やかなクロックドリフトを
+/// 吸収しながら、44.1kHzと48kHzの切替やframe欠落をロック解除として扱う。
+///
+/// ADATストリームからS/MUX2とS/MUX4は判別できないため、smux_activeは
+/// User bitの状態をそのままS/MUX2として扱う。S/MUX4の接続は利用側で
+/// 禁止すること。
+module StreamLockQualifier (
+    clk        : input  clock    , /// システムクロック
+    rst        : input  reset    , /// リセット
+    frame_valid: input  logic    , /// 完全フレームcommitパルス
+    smux_active: input  bbool    , /// commit対象フレームのS/MUX2状態
+    timestamp  : input  logic<16>, /// 単調増加するシステムクロックtimestamp
+    locked     : output bbool    , /// 安定した物理ADATストリームのlock状態
+) {
+    var locked_reg        : bbool    ;
+    var have_prev_frame   : logic    ;
+    var have_period       : logic    ;
+    var previous_timestamp: logic<16>;
+    // 周期をQ8固定小数で保持し、観測時刻の量子化誤差を比較・更新する。
+    var reference_q8   : logic<24>;
+    var candidate_count: logic<6> ;
+    var previous_smux  : logic    ;
+
+    var elapsed          : logic<16>;
+    var elapsed_q8       : logic<24>;
+    var tolerance_q8     : logic<24>;
+    var lower_bound_q8   : logic<24>;
+    var upper_bound_q8   : logic<24>;
+    var timeout_limit_q8 : logic<24>;
+    var interval_is_valid: logic    ;
+
+    assign locked     = locked_reg;
+    assign elapsed    = timestamp - previous_timestamp;
+    assign elapsed_q8 = {elapsed, 8'd0};
+    // 1/64周期の許容幅。Q8で比較するため、1042clkでは約4,168となる。
+    assign tolerance_q8   = reference_q8 >> 6;
+    assign lower_bound_q8 = if reference_q8 >: tolerance_q8 ? reference_q8 - tolerance_q8 : 24'd0;
+    assign upper_bound_q8 = reference_q8 + tolerance_q8;
+    // timeoutはreferenceの3/2周期。次のframeを待たずにunlockする。
+    assign timeout_limit_q8  = reference_q8 + (reference_q8 >> 1);
+    assign interval_is_valid = elapsed_q8 >= lower_bound_q8 && elapsed_q8 <= upper_bound_q8;
+
+    always_ff {
+        if_reset {
+            locked_reg         = 1'b0;
+            have_prev_frame    = 1'b0;
+            have_period        = 1'b0;
+            previous_timestamp = 16'd0;
+            reference_q8       = 24'd0;
+            candidate_count    = 6'd0;
+            previous_smux      = 1'b0;
+        } else if frame_valid {
+            // frame_validのpayloadと同じedgeでcommit対象のmodeを記録する。
+            if !have_prev_frame {
+                previous_timestamp = timestamp;
+                previous_smux      = smux_active;
+                have_prev_frame    = 1'b1;
+                have_period        = 1'b0;
+                candidate_count    = 6'd0;
+                locked_reg         = 1'b0;
+            } else if !have_period {
+                // 最初のintervalを基準周期にすることで44.1/48kHzを共通化する。
+                previous_timestamp = timestamp;
+                reference_q8       = elapsed_q8;
+                previous_smux      = smux_active;
+                have_period        = 1'b1;
+                candidate_count    = 6'd1;
+                locked_reg         = 1'b0;
+            } else if smux_active != previous_smux {
+                // S/MUX状態の変化は周期が同じでも再qualificationする。
+                previous_timestamp = timestamp;
+                previous_smux      = smux_active;
+                reference_q8       = 24'd0;
+                have_period        = 1'b0;
+                candidate_count    = 6'd0;
+                locked_reg         = 1'b0;
+            } else if !interval_is_valid {
+                // 44.1kHz↔48kHz、frame欠落、非連続な周期変化を同じ扱いにする。
+                previous_timestamp = timestamp;
+                reference_q8       = 24'd0;
+                have_period        = 1'b0;
+                candidate_count    = 6'd0;
+                locked_reg         = 1'b0;
+            } else {
+                previous_timestamp = timestamp;
+                // FILTER_SHIFT=8相当の緩やかな追従で、到着時刻ジッターを増幅しない。
+                if elapsed_q8 >: reference_q8 {
+                    reference_q8 = reference_q8 + ((elapsed_q8 - reference_q8) >> 8);
+                } else if elapsed_q8 <: reference_q8 {
+                    reference_q8 = reference_q8 - ((reference_q8 - elapsed_q8) >> 8);
+                }
+                if candidate_count <: 6'd32 {
+                    candidate_count = candidate_count + 6'd1;
+                }
+                // seed後32個目の安定interval（frame #33）でlockする。
+                if candidate_count >: 6'd31 {
+                    locked_reg = 1'b1;
+                }
+            }
+        } else if have_prev_frame && have_period && elapsed_q8 >= timeout_limit_q8 {
+            // 次のframeを待たず、基準周期の3/2倍でunlockする。
+            have_prev_frame = 1'b0;
+            have_period     = 1'b0;
+            candidate_count = 6'd0;
+            locked_reg      = 1'b0;
+        }
+    }
+}
+
+/// 周期安定後だけlockをアサートし、周期変化・mode変化・frame欠落で解除することを検証
+#[test(test_stream_lock_qualifier)]
+module test_stream_lock_qualifier {
+    inst clk: $tb::clock_gen;
+    inst rst: $tb::reset_gen ( clk );
+
+    var frame_valid: logic    ;
+    var smux_active: bbool    ;
+    var timestamp  : logic<16>;
+    var locked     : bbool    ;
+
+    inst dut: StreamLockQualifier ( clk, rst, frame_valid, smux_active, timestamp, locked );
+
+    function frame_at (
+        stamp: input logic<16>,
+    ) {
+        timestamp   = stamp;
+        frame_valid = 1'b1;
+        clk.next(1);
+        frame_valid = 1'b0;
+    }
+
+    initial {
+        frame_valid = 1'b0;
+        smux_active = 1'b0;
+        timestamp   = 16'd0;
+        rst.assert();
+
+        // 48kHz相当の1042clk周期。32interval完了まではlockしない。
+        frame_at(16'd1000);
+        for i in 1..34 {
+            frame_at(16'd1000 + (i as 16) * 16'd1042);
+            if i <: 33 {
+                $assert(locked == 1'b0, "lock acquired before 32 stable intervals");
+            }
+        }
+        $assert(locked == 1'b1, "nominal stream should lock");
+
+        // ±1clk量子化ジッターはlockを維持する。
+        frame_at(timestamp + 16'd1041);
+        frame_at(timestamp + 16'd1043);
+        $assert(locked == 1'b1, "quantization jitter should keep lock");
+
+        // 44.1kHz相当への不連続変化は即時unlockし、再qualificationを要求する。
+        frame_at(timestamp + 16'd1134);
+        $assert(locked == 1'b0, "rate step should unlock");
+
+        // User bitのmode変更も同じ周期で即時unlockする。
+        smux_active = 1'b1;
+        frame_at(timestamp + 16'd1134);
+        $assert(locked == 1'b0, "S/MUX mode change should unlock");
+
+        // 長い欠落は次のframeを待たずにunlockする。
+        timestamp = timestamp + 16'd2000;
+        clk.next(1);
+        $assert(locked == 1'b0, "frame timeout should unlock");
+
+        $finish();
+    }
+}
