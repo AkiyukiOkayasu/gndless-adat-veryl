@@ -1,0 +1,380 @@
+import Types::AdatFamily;
+
+/// AdatTx→AdatRxを同一クロックで接続するpackage内E2E経路。
+///
+/// `run`をLowにすると現在フレームの送信完了後にストリームを停止し、
+/// 再開時は新しいframe pulseから送信を再開する。
+module AdatTxRxPath #(
+    param ADAT_FAMILY: AdatFamily = AdatFamily::F48K,
+) (
+    clk        : input  clock        ,
+    rst        : input  reset        ,
+    run        : input  bbool        ,
+    smux_active: input  bbool        ,
+    tx_channels: input  logic<24> [8],
+    adat       : output logic        ,
+    rx_smux    : output bbool        ,
+    rx_channels: output logic<24> [8],
+    rx_valid   : output logic        ,
+    rx_locked  : output bbool        ,
+) {
+    var frame_clk_tx : logic;
+    var frame_done   : logic;
+    var start_pending: bbool;
+
+    always_ff (clk, rst) {
+        if_reset {
+            frame_clk_tx  = 1'b0;
+            start_pending = true;
+        } else {
+            frame_clk_tx = 1'b0;
+            if !run {
+                start_pending = true;
+            } else if start_pending {
+                frame_clk_tx  = 1'b1;
+                start_pending = false;
+            } else if frame_done {
+                start_pending = true;
+            }
+        }
+    }
+
+    inst tx: AdatTx #(
+        CLK_FREQ   : 50_000_000 ,
+        ADAT_FAMILY: ADAT_FAMILY,
+    ) (
+        clk        : clk         ,
+        rst        : rst         ,
+        frame_clk  : frame_clk_tx,
+        channels   : tx_channels ,
+        smux_active: smux_active ,
+        adat       : adat        ,
+        frame_done : frame_done  ,
+    );
+
+    inst rx: AdatRx (
+        clk        : clk        ,
+        rst        : rst        ,
+        adat       : adat       ,
+        frame_clk  : _          ,
+        smux_active: rx_smux    ,
+        channels   : rx_channels,
+        frame_valid: rx_valid   ,
+        locked     : rx_locked  ,
+    );
+}
+
+/// 48kHz系と44.1kHz系のAdatTxを切り替えるpackage内E2E経路。
+module AdatTxRxRatePath (
+    clk        : input  clock        ,
+    rst        : input  reset        ,
+    run        : input  bbool        ,
+    use_44k1   : input  bbool        ,
+    tx_channels: input  logic<24> [8],
+    adat       : output logic        ,
+    rx_smux    : output bbool        ,
+    rx_channels: output logic<24> [8],
+    rx_valid   : output logic        ,
+    rx_locked  : output bbool        ,
+) {
+    var frame_clk_48 : logic;
+    var frame_clk_44 : logic;
+    var frame_done_48: logic;
+    var frame_done_44: logic;
+    var pending_48   : bbool;
+    var pending_44   : bbool;
+    var adat_48      : logic;
+    var adat_44      : logic;
+
+    always_ff (clk, rst) {
+        if_reset {
+            frame_clk_48 = 1'b0;
+            frame_clk_44 = 1'b0;
+            pending_48   = true;
+            pending_44   = true;
+        } else {
+            frame_clk_48 = 1'b0;
+            frame_clk_44 = 1'b0;
+            if use_44k1 {
+                pending_48 = true;
+                if !run {
+                    pending_44 = true;
+                } else if pending_44 {
+                    frame_clk_44 = 1'b1;
+                    pending_44   = false;
+                } else if frame_done_44 {
+                    pending_44 = true;
+                }
+            } else {
+                pending_44 = true;
+                if !run {
+                    pending_48 = true;
+                } else if pending_48 {
+                    frame_clk_48 = 1'b1;
+                    pending_48   = false;
+                } else if frame_done_48 {
+                    pending_48 = true;
+                }
+            }
+        }
+    }
+
+    inst tx_48: AdatTx #(
+        CLK_FREQ   : 50_000_000      ,
+        ADAT_FAMILY: AdatFamily::F48K,
+    ) (
+        clk        : clk          ,
+        rst        : rst          ,
+        frame_clk  : frame_clk_48 ,
+        channels   : tx_channels  ,
+        smux_active: false        ,
+        adat       : adat_48      ,
+        frame_done : frame_done_48,
+    );
+
+    inst tx_44: AdatTx #(
+        CLK_FREQ   : 50_000_000       ,
+        ADAT_FAMILY: AdatFamily::F44K1,
+    ) (
+        clk        : clk          ,
+        rst        : rst          ,
+        frame_clk  : frame_clk_44 ,
+        channels   : tx_channels  ,
+        smux_active: false        ,
+        adat       : adat_44      ,
+        frame_done : frame_done_44,
+    );
+
+    assign adat = if use_44k1 ? adat_44 : adat_48;
+
+    inst rx: AdatRx (
+        clk        : clk        ,
+        rst        : rst        ,
+        adat       : adat       ,
+        frame_clk  : _          ,
+        smux_active: rx_smux    ,
+        channels   : rx_channels,
+        frame_valid: rx_valid   ,
+        locked     : rx_locked  ,
+    );
+}
+
+/// 48kHz→44.1kHz→48kHzの切替で旧周期をunlockし、新周期を再qualificationする。
+#[test(test_adat_tx_rx_rate_transition)]
+module test_adat_tx_rx_rate_transition {
+    inst clk: $tb::clock_gen;
+    inst rst: $tb::reset_gen ( clk );
+
+    var run         : bbool        ;
+    var use_44k1    : bbool        ;
+    var tx_channels : logic<24> [8];
+    var adat        : logic        ;
+    var rx_smux     : bbool        ;
+    var rx_channels : logic<24> [8];
+    var rx_valid    : logic        ;
+    var rx_locked   : bbool        ;
+    var phase       : logic<2>     ;
+    var initial_lock: bbool        ;
+    var lock_44     : bbool        ;
+    var lock_48     : bbool        ;
+    var raw_44      : bbool        ;
+    var raw_48      : bbool        ;
+
+    inst path: AdatTxRxRatePath (
+        clk        : clk        ,
+        rst        : rst        ,
+        run        : run        ,
+        use_44k1   : use_44k1   ,
+        tx_channels: tx_channels,
+        adat       : adat       ,
+        rx_smux    : rx_smux    ,
+        rx_channels: rx_channels,
+        rx_valid   : rx_valid   ,
+        rx_locked  : rx_locked  ,
+    );
+
+    always_ff (clk, rst) {
+        if_reset {
+            initial_lock = false;
+            lock_44      = false;
+            lock_48      = false;
+            raw_44       = false;
+            raw_48       = false;
+        } else {
+            if phase == 2'd0 && rx_locked {
+                initial_lock = true;
+            }
+            if phase == 2'd1 {
+                if rx_valid && !rx_locked {
+                    raw_44 = true;
+                }
+                if rx_locked {
+                    lock_44 = true;
+                    if rx_valid {
+                        $assert(rx_channels[0] == 24'h520001, "44.1k frame payload mismatch");
+                    }
+                }
+            }
+            if phase == 2'd2 {
+                if rx_valid && !rx_locked {
+                    raw_48 = true;
+                }
+                if rx_locked {
+                    lock_48 = true;
+                    if rx_valid {
+                        $assert(rx_channels[0] == 24'h530001, "final 48k frame payload mismatch");
+                    }
+                }
+            }
+        }
+    }
+
+    initial {
+        run            = false;
+        use_44k1       = false;
+        phase          = 2'd0;
+        tx_channels[0] = 24'h510001;
+        tx_channels[1] = 24'h510002;
+        tx_channels[2] = 24'h510003;
+        tx_channels[3] = 24'h510004;
+        tx_channels[4] = 24'h510005;
+        tx_channels[5] = 24'h510006;
+        tx_channels[6] = 24'h510007;
+        tx_channels[7] = 24'h510008;
+        rst.assert();
+        run = true;
+        clk.next(60_000);
+        $assert(initial_lock, "initial 48k stream did not lock");
+
+        run = false;
+        clk.next(3_000);
+        $assert(!rx_locked, "48k stream did not unlock before rate change");
+        phase          = 2'd1;
+        tx_channels[0] = 24'h520001;
+        tx_channels[1] = 24'h520002;
+        tx_channels[2] = 24'h520003;
+        tx_channels[3] = 24'h520004;
+        tx_channels[4] = 24'h520005;
+        tx_channels[5] = 24'h520006;
+        tx_channels[6] = 24'h520007;
+        tx_channels[7] = 24'h520008;
+        use_44k1       = true;
+        run            = true;
+        clk.next(70_000);
+        $assert(lock_44, "44.1k stream did not relock");
+
+        run = false;
+        clk.next(3_000);
+        $assert(!rx_locked, "44.1k stream did not unlock before return");
+        phase          = 2'd2;
+        tx_channels[0] = 24'h530001;
+        tx_channels[1] = 24'h530002;
+        tx_channels[2] = 24'h530003;
+        tx_channels[3] = 24'h530004;
+        tx_channels[4] = 24'h530005;
+        tx_channels[5] = 24'h530006;
+        tx_channels[6] = 24'h530007;
+        tx_channels[7] = 24'h530008;
+        use_44k1       = false;
+        run            = true;
+        clk.next(70_000);
+
+        $assert(lock_48, "final 48k stream did not relock");
+        $assert(raw_44 && raw_48, "qualification frames were not observable while unlocked");
+        $assert(!rx_smux, "rate transition unexpectedly asserted S/MUX");
+        $finish();
+    }
+}
+
+/// S/MUX2の停止・再開でlockを解除し、新しいphysical frame列へ復帰する。
+#[test(test_adat_tx_rx_smux_recovery)]
+module test_adat_tx_rx_smux_recovery {
+    inst clk: $tb::clock_gen;
+    inst rst: $tb::reset_gen ( clk );
+
+    var run           : bbool        ;
+    var tx_channels   : logic<24> [8];
+    var adat          : logic        ;
+    var rx_smux       : bbool        ;
+    var rx_channels   : logic<24> [8];
+    var rx_valid      : logic        ;
+    var rx_locked     : bbool        ;
+    var locked_seen   : bbool        ;
+    var timeout_seen  : bbool        ;
+    var recovery_seen : bbool        ;
+    var recovery_valid: bbool        ;
+
+    inst path: AdatTxRxPath #(
+        ADAT_FAMILY: AdatFamily::F48K,
+    ) (
+        clk        : clk        ,
+        rst        : rst        ,
+        run        : run        ,
+        smux_active: true       ,
+        tx_channels: tx_channels,
+        adat       : adat       ,
+        rx_smux    : rx_smux    ,
+        rx_channels: rx_channels,
+        rx_valid   : rx_valid   ,
+        rx_locked  : rx_locked  ,
+    );
+
+    always_ff (clk, rst) {
+        if_reset {
+            locked_seen    = false;
+            timeout_seen   = false;
+            recovery_seen  = false;
+            recovery_valid = false;
+        } else {
+            if rx_locked && !locked_seen {
+                locked_seen = true;
+            } else if locked_seen && !rx_locked {
+                timeout_seen = true;
+            }
+            if timeout_seen && rx_locked {
+                recovery_seen = true;
+            }
+            if recovery_seen && rx_valid && rx_locked {
+                recovery_valid = true;
+                for i in 0..8 {
+                    $assert(rx_channels[i] == tx_channels[i], "recovered S/MUX physical channel mismatch");
+                }
+            }
+        }
+    }
+
+    initial {
+        run            = false;
+        tx_channels[0] = 24'h330001;
+        tx_channels[1] = 24'h330002;
+        tx_channels[2] = 24'h330003;
+        tx_channels[3] = 24'h330004;
+        tx_channels[4] = 24'h330005;
+        tx_channels[5] = 24'h330006;
+        tx_channels[6] = 24'h330007;
+        tx_channels[7] = 24'h330008;
+        rst.assert();
+        run = true;
+        clk.next(60_000);
+        $assert(locked_seen, "S/MUX2 stream did not lock");
+        $assert(rx_smux, "S/MUX2 flag was not propagated");
+
+        run = false;
+        clk.next(2_500);
+        $assert(timeout_seen, "S/MUX2 lock did not clear after timeout");
+
+        tx_channels[0] = 24'h440001;
+        tx_channels[1] = 24'h440002;
+        tx_channels[2] = 24'h440003;
+        tx_channels[3] = 24'h440004;
+        tx_channels[4] = 24'h440005;
+        tx_channels[5] = 24'h440006;
+        tx_channels[6] = 24'h440007;
+        tx_channels[7] = 24'h440008;
+        run            = true;
+        clk.next(60_000);
+        $assert(recovery_seen, "S/MUX2 stream did not relock");
+        $assert(recovery_valid, "recovered S/MUX2 frame did not reach AdatRx");
+        $finish();
+    }
+}
