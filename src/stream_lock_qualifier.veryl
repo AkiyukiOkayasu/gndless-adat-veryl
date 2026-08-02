@@ -4,6 +4,7 @@
 /// commitした1クロックパルスでなければならない。最初の完全フレームは
 /// timestampの基準にのみ使い、その後32個の安定したframe intervalを
 /// 観測してから`locked`をアサートする。周期の許容幅は推定周期の1/64
+/// （ただしtimestampの量子化誤差を吸収するため最低1システムクロック）
 /// であり、量子化ジッターと緩やかなクロックドリフトを
 /// 吸収しながら、44.1kHzと48kHzの切替やframe欠落をロック解除として扱う。
 ///
@@ -38,8 +39,9 @@ module StreamLockQualifier (
     assign locked     = locked_reg;
     assign elapsed    = timestamp - previous_timestamp;
     assign elapsed_q8 = {elapsed, 8'd0};
-    // 1/64周期の許容幅。Q8で比較するため、1042clkでは約4,168となる。
-    assign tolerance_q8   = reference_q8 >> 6;
+    // 1/64周期の許容幅。短い合成テスト周期でも1clkの量子化誤差を
+    // 許容できるよう、Q8で最低1clk (=256)を確保する。
+    assign tolerance_q8   = if (reference_q8 >> 6) >: 24'd256 ? reference_q8 >> 6 : 24'd256;
     assign lower_bound_q8 = if reference_q8 >: tolerance_q8 ? reference_q8 - tolerance_q8 : 24'd0;
     assign upper_bound_q8 = reference_q8 + tolerance_q8;
     // timeoutはreferenceの3/2周期。次のframeを待たずにunlockする。
@@ -66,12 +68,23 @@ module StreamLockQualifier (
                 locked_reg         = 1'b0;
             } else if !have_period {
                 // 最初のintervalを基準周期にすることで44.1/48kHzを共通化する。
-                previous_timestamp = timestamp;
-                reference_q8       = elapsed_q8;
-                previous_smux      = smux_active;
-                have_period        = 1'b1;
-                candidate_count    = 6'd1;
-                locked_reg         = 1'b0;
+                // ただしseed直後にS/MUXが変わった場合は、そのintervalを
+                // 異なるストリームの混在として捨て、現在frameを新seedにする。
+                if smux_active != previous_smux {
+                    previous_timestamp = timestamp;
+                    previous_smux      = smux_active;
+                    reference_q8       = 24'd0;
+                    have_period        = 1'b0;
+                    candidate_count    = 6'd0;
+                    locked_reg         = 1'b0;
+                } else {
+                    previous_timestamp = timestamp;
+                    reference_q8       = elapsed_q8;
+                    previous_smux      = smux_active;
+                    have_period        = 1'b1;
+                    candidate_count    = 6'd1;
+                    locked_reg         = 1'b0;
+                }
             } else if smux_active != previous_smux {
                 // S/MUX状態の変化は周期が同じでも再qualificationする。
                 previous_timestamp = timestamp;
@@ -123,6 +136,7 @@ module test_stream_lock_qualifier {
     var smux_active: bbool    ;
     var timestamp  : logic<16>;
     var locked     : bbool    ;
+    var next_stamp : logic<16>;
 
     inst dut: StreamLockQualifier ( clk, rst, frame_valid, smux_active, timestamp, locked );
 
@@ -139,19 +153,144 @@ module test_stream_lock_qualifier {
         frame_valid = 1'b0;
         smux_active = 1'b0;
         timestamp   = 16'd0;
+        next_stamp  = 16'd0;
         rst.assert();
 
-        // 48kHz相当の1042clk周期。32interval完了まではlockしない。
+        // 48kHz相当の1042clk周期。seedを含むframe番号を明示し、
+        // frame #33（32個目のstable interval）より前はlockしない。
         frame_at(16'd1000);
-        for i in 1..34 {
+        for i in 1..33 {
             frame_at(16'd1000 + (i as 16) * 16'd1042);
-            if i <: 33 {
-                $assert(locked == 1'b0, "lock acquired before 32 stable intervals");
-            }
+            $assert(locked == 1'b0, "lock acquired before frame #33");
         }
+        frame_at(16'd1000 + 16'd33 * 16'd1042);
         $assert(locked == 1'b1, "nominal stream should lock");
 
+        // timeoutは3P/2の直前ではlockを維持し、到達したcycleで解除する。
+        timestamp = timestamp + 16'd1562;
+        clk.next(1);
+        $assert(locked == 1'b1, "lock must survive just before 3P/2 timeout");
+        timestamp = timestamp + 16'd1;
+        clk.next(1);
+        $assert(locked == 1'b0, "lock must clear at 3P/2 timeout");
+
+        // 実周期48kHzの許容境界を確認する。1042±16clkは維持し、
+        // ±17clkはinterval不正として解除する。
+        rst.assert();
+        smux_active = 1'b0;
+        frame_at(16'd1000);
+        for _i in 1..34 {
+            frame_at(16'd1000 + (_i as 16) * 16'd1042);
+        }
+        $assert(locked == 1'b1, "48kHz nominal stream should lock");
+        frame_at(timestamp + 16'd1058);
+        $assert(locked == 1'b1, "48kHz +16clk jitter should keep lock");
+        frame_at(timestamp + 16'd1026);
+        $assert(locked == 1'b1, "48kHz -16clk jitter should keep lock");
+        frame_at(timestamp + 16'd1059);
+        $assert(locked == 1'b0, "48kHz +17clk jitter should unlock");
+
+        rst.assert();
+        smux_active = 1'b0;
+        frame_at(16'd1000);
+        for _i in 1..34 {
+            frame_at(16'd1000 + (_i as 16) * 16'd1042);
+        }
+        frame_at(timestamp + 16'd1025);
+        $assert(locked == 1'b0, "48kHz -17clk jitter should unlock");
+
+        // 実周期44.1kHzの許容境界も同様に確認する。1134±17clkは
+        // 維持し、±18clkはinterval不正として解除する。
+        rst.assert();
+        smux_active = 1'b0;
+        frame_at(16'd1000);
+        for _i in 1..34 {
+            frame_at(16'd1000 + (_i as 16) * 16'd1134);
+        }
+        $assert(locked == 1'b1, "44.1kHz nominal stream should lock");
+        frame_at(timestamp + 16'd1151);
+        $assert(locked == 1'b1, "44.1kHz +17clk jitter should keep lock");
+        frame_at(timestamp + 16'd1117);
+        $assert(locked == 1'b1, "44.1kHz -17clk jitter should keep lock");
+        frame_at(timestamp + 16'd1152);
+        $assert(locked == 1'b0, "44.1kHz +18clk jitter should unlock");
+
+        rst.assert();
+        smux_active = 1'b0;
+        frame_at(16'd1000);
+        for _i in 1..34 {
+            frame_at(16'd1000 + (_i as 16) * 16'd1134);
+        }
+        frame_at(timestamp + 16'd1116);
+        $assert(locked == 1'b0, "44.1kHz -18clk jitter should unlock");
+
+        // seed直後のS/MUX変化はintervalとして数えず、現在frameを新seedにする。
+        rst.assert();
+        smux_active = 1'b0;
+        frame_at(16'd100);
+        smux_active = 1'b1;
+        frame_at(16'd116);
+        $assert(locked == 1'b0, "S/MUX change at first interval must not qualify");
+        frame_at(16'd132);
+        for _i in 0..30 {
+            frame_at(timestamp + 16'd16);
+        }
+        $assert(locked == 1'b0, "new S/MUX seed needs 32 stable intervals");
+        frame_at(timestamp + 16'd16);
+        frame_at(timestamp + 16'd16);
+        $assert(locked == 1'b1, "new S/MUX seed should eventually lock");
+
+        // 48kHz相当の16/17clk境界（合成テスト周期）を許容する。
+        rst.assert();
+        smux_active = 1'b0;
+        next_stamp  = 16'd100;
+        frame_at(next_stamp);
+        for _i in 0..16 {
+            next_stamp = next_stamp + 16'd16;
+            frame_at(next_stamp);
+            next_stamp = next_stamp + 16'd17;
+            frame_at(next_stamp);
+        }
+        next_stamp = next_stamp + 16'd16;
+        frame_at(next_stamp);
+        $assert(locked == 1'b1, "16/17clk stream should lock at strict boundary");
+
+        // 44.1kHz相当の17/18clk境界も同じ許容幅で扱う。
+        rst.assert();
+        next_stamp = 16'd100;
+        frame_at(next_stamp);
+        for _i in 0..16 {
+            next_stamp = next_stamp + 16'd17;
+            frame_at(next_stamp);
+            next_stamp = next_stamp + 16'd18;
+            frame_at(next_stamp);
+        }
+        next_stamp = next_stamp + 16'd17;
+        frame_at(next_stamp);
+        $assert(locked == 1'b1, "17/18clk stream should lock at strict boundary");
+
+        // timestampの16bit wrapを跨いでも差分演算でqualificationを継続する。
+        rst.assert();
+        next_stamp = 16'd65520;
+        frame_at(next_stamp);
+        for _i in 0..16 {
+            next_stamp = next_stamp + 16'd16;
+            frame_at(next_stamp);
+            next_stamp = next_stamp + 16'd17;
+            frame_at(next_stamp);
+        }
+        next_stamp = next_stamp + 16'd16;
+        frame_at(next_stamp);
+        $assert(locked == 1'b1, "timestamp wrap must not break lock");
+
         // ±1clk量子化ジッターはlockを維持する。
+        rst.assert();
+        smux_active = 1'b0;
+        frame_at(16'd1000);
+        for _i in 1..34 {
+            frame_at(16'd1000 + (_i as 16) * 16'd1042);
+        }
+        $assert(locked == 1'b1, "nominal stream should re-lock");
         frame_at(timestamp + 16'd1041);
         frame_at(timestamp + 16'd1043);
         $assert(locked == 1'b1, "quantization jitter should keep lock");

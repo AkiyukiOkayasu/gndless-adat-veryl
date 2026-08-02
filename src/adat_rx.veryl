@@ -51,8 +51,8 @@ import Types::AdatFamily;
 /// # 公開出力の概念タイミング
 ///
 /// 次図は縮尺なし。省略区間には複数フレームを含み得る。
-/// `channels` のatomic commitのうち、lock確定後のframeだけで
-/// `frame_valid` がシステムクロック1周期だけHighになる。
+/// `channels` のatomic commitごとに `frame_valid` がシステムクロック1周期だけHighになる。
+/// `frame_valid`はraw commit pulseであり、下流は`frame_valid && locked`を受理条件にする。
 /// `locked` は完全フレーム周期が安定した後にHighになる。
 /// `frame_clk` はADATフレーム周期を示し、S/MUX時の論理sample rateではない。
 ///

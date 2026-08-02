@@ -10,10 +10,10 @@
 /// 通常は44.1/48kHzで、S/MUX2有効時の論理sample rateは2倍。フレーム周期の約50%デューティで出力する。
 ///
 /// # frame_valid
-/// channel 0から7まで完全な順序で受信・commitしたフレームのうち、
-/// StreamLockQualifierがlockを確定したものだけを1サイクルで通知する。
-/// qualification中、受信途中、チャンネル欠落、順序異常、rate transition中は
-/// `frame_valid=0`となる。
+/// channel 0から7まで完全な順序で受信・commitした完全frameを1サイクルで通知する。
+/// `locked`とは独立したraw commit pulseであり、qualification中やrate/mode
+/// transitionのframeでは`frame_valid=1, locked=0`になり得る。下流は
+/// `frame_valid && locked`を受理条件にすること。
 ///
 /// # locked
 /// 完全フレームの周期安定を確認したときに`locked`をアサートする。
@@ -52,9 +52,9 @@ module OutputInterface (
     assign smux_active = committed_smux;
 
     assign frame_clk = word_clk;
-    // lock確定後のcommitだけを公開し、qualification中・rate transition中の
-    // フレームを下流のaudio resetへ流さない。
-    assign frame_valid = commit_pending && lock_reg;
+    // 完全frameのraw commitを1クロック遅延して公開する。lockは独立した
+    // qualification状態であり、下流がframe_valid && lockedで受理する。
+    assign frame_valid = commit_pending;
     assign locked      = lock_reg;
 
     // チャンネル出力割り当て
@@ -82,7 +82,7 @@ module OutputInterface (
     );
 
     // qualifierはvalid_outを1クロック遅れて観測するため、同じcommitを
-    // qualified frame_validとして公開する。
+    // raw frame_validとして公開する。
     always_ff {
         if_reset {
             commit_pending = 1'b0;
@@ -178,18 +178,19 @@ module test_adat_output_interface {
     inst clk: $tb::clock_gen;
     inst rst: $tb::reset_gen ( clk );
 
-    var frame_time    : logic<12>    ;
-    var data          : logic<24>    ;
-    var channel       : logic<3>     ;
-    var data_valid    : logic        ;
-    var sync          : logic        ;
-    var user_bits     : logic<4>     ;
-    var smux_active   : bbool        ;
-    var frame_clk     : logic        ;
-    var channels      : logic<24> [8];
-    var frame_valid   : logic        ;
-    var locked        : bbool        ;
-    var qualified_seen: logic        ;
+    var frame_time     : logic<12>    ;
+    var data           : logic<24>    ;
+    var channel        : logic<3>     ;
+    var data_valid     : logic        ;
+    var sync           : logic        ;
+    var user_bits      : logic<4>     ;
+    var smux_active    : bbool        ;
+    var frame_clk      : logic        ;
+    var channels       : logic<24> [8];
+    var frame_valid    : logic        ;
+    var locked         : bbool        ;
+    var raw_seen       : logic        ;
+    var transition_seen: logic        ;
 
     inst dut: OutputInterface (
         clk          ,
@@ -217,7 +218,10 @@ module test_adat_output_interface {
         clk.next(1);
         data_valid = 1'b0;
         if frame_valid {
-            qualified_seen = 1'b1;
+            raw_seen = 1'b1;
+            if !locked {
+                transition_seen = 1'b1;
+            }
         }
     }
 
@@ -230,19 +234,17 @@ module test_adat_output_interface {
         push_channel(3'd5, 24'h600000);
         push_channel(3'd6, 24'h700000);
         push_channel(3'd7, 24'h7FFFFF);
-        if frame_valid {
-            qualified_seen = 1'b1;
-        }
     }
 
     initial {
-        frame_time     = 12'd2048;
-        data           = 24'd0;
-        channel        = 3'd0;
-        data_valid     = 1'b0;
-        sync           = 1'b1;
-        user_bits      = 4'b0010;
-        qualified_seen = 1'b0;
+        frame_time      = 12'd2048;
+        data            = 24'd0;
+        channel         = 3'd0;
+        data_valid      = 1'b0;
+        sync            = 1'b1;
+        user_bits       = 4'b0010;
+        raw_seen        = 1'b0;
+        transition_seen = 1'b0;
         rst.assert();
 
         // 欠落channelを含むcandidateは公開bufferを更新しない。
@@ -252,7 +254,7 @@ module test_adat_output_interface {
         $assert(frame_valid == 1'b0, "incomplete frame must not assert frame_valid");
         $assert(channels[0] == 24'd0, "incomplete frame leaked channel 0");
 
-        // 最初の完全frameはatomic commitされるが、qualify完了までは公開しない。
+        // 最初の完全frameはatomic commitされ、次cycleにraw pulseを公開する。
         push_channel(3'd0, 24'h100000);
         push_channel(3'd1, 24'h200000);
         push_channel(3'd2, 24'h300000);
@@ -262,18 +264,30 @@ module test_adat_output_interface {
         push_channel(3'd6, 24'h700000);
         push_channel(3'd7, 24'h7FFFFF);
 
-        $assert(frame_valid == 1'b0, "frame_valid must wait for stream qualification");
+        $assert(frame_valid == 1'b0, "frame_valid is delayed until the commit pulse");
+        clk.next(1);
+        $assert(frame_valid == 1'b1, "complete frame must emit raw frame_valid");
+        $assert(locked == 1'b0, "first frame must be visible before qualification");
         $assert(smux_active == 1'b1, "S/MUX flag mismatch");
         $assert(channels[0] == 24'h100000, "channel 0 data mismatch");
         $assert(channels[7] == 24'h7FFFFF, "channel 7 data mismatch");
 
-        // 32個の安定interval後にqualifierがlockし、qualified frame_validを出す。
+        // 32個の安定interval後にqualifierがlockする。raw frame_validは
+        // qualification中も各atomic commitで発生する。
         for _i in 0..34 {
             push_frame();
         }
         clk.next(1);
         $assert(locked == 1'b1, "stable stream should lock");
-        $assert(qualified_seen == 1'b1, "qualified frame_valid was not observed");
+        $assert(raw_seen == 1'b1, "raw frame_valid was not observed");
+
+        // S/MUX mode transitionのcommitはraw pulseを出すが、lockは解除する。
+        user_bits = 4'b0000;
+        push_frame();
+        clk.next(1);
+        $assert(frame_valid == 1'b1, "mode transition must emit raw frame_valid");
+        $assert(locked == 1'b0, "mode transition frame must not be locked");
+        $assert(transition_seen == 1'b1, "unlocked raw frame_valid was not observed");
         $finish();
     }
 }
