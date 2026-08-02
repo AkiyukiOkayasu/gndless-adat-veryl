@@ -160,6 +160,14 @@ module test_stream_lock_qualifier {
         frame_at(timestamp + 16'd1134);
         $assert(locked == 1'b0, "rate step should unlock");
 
+        // 44.1kHz側で再qualificationし、逆方向の48kHz stepでもunlockする。
+        for _i in 0..34 {
+            frame_at(timestamp + 16'd1134);
+        }
+        $assert(locked == 1'b1, "44.1kHz stream should re-lock");
+        frame_at(timestamp + 16'd1042);
+        $assert(locked == 1'b0, "reverse rate step should unlock");
+
         // User bitのmode変更も同じ周期で即時unlockする。
         smux_active = 1'b1;
         frame_at(timestamp + 16'd1134);
