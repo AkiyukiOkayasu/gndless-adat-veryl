@@ -56,12 +56,18 @@ module TimingTracker (
         } else if edge_pulse {
             // エッジでカウンタをリセット、最大値を更新
             edge_time_reg = cur_time;
-            if cur_time[11:2] >: max_time {
+            // 入力停止中の長いgapは最大時間へ取り込まない。停止後の
+            // 再開エッジを同期期間として扱い、旧ストリームの閾値を維持する。
+            if cur_time <: 12'd1024 && cur_time[11:2] >: max_time {
                 max_time = cur_time[11:2];
             }
             cur_time = 12'd0;
         } else {
-            cur_time = cur_time + 12'd1;
+            // wrapさせず飽和させることで、長い入力停止後の最初のエッジを
+            // 12bit wrap値（短いデータ間隔）と誤認しない。
+            if cur_time <: 12'hFFF {
+                cur_time = cur_time + 12'd1;
+            }
             // 徐々にmax_timeを減少（AGC的動作でジッタに対応）
             if wait_count == 16'hFFFF {
                 if max_time >: 10'd1 {
@@ -81,6 +87,11 @@ module TimingTracker (
             sync_mask = 1'b0;
         } else if edge_pulse {
             sync_mask = cur_time[11:2] <= threshold;
+        } else if cur_time >= 12'd1024 {
+            // 1kclk以上エッジが無い場合は、停止した入力を同期期間として扱う。
+            // cur_timeの12bit wrapで再開フレームの先頭をデータ期間と誤認し、
+            // FrameParserが古い途中状態から復帰不能になるのを防ぐ。
+            sync_mask = 1'b0;
         }
     }
 
@@ -94,6 +105,11 @@ module TimingTracker (
         } else {
             sync_ff[1] = sync_ff[0];
             sync_ff[0] = sync_mask;
+            if cur_time >= 12'd1024 {
+                // 入力停止中は次の同期エッジを新しいフレーム列の先頭として扱う。
+                frame_count    = 12'd0;
+                have_prev_sync = 1'b0;
+            }
             // sync間隔(長いエッジ間隔)の終了時にフレーム時間をキャプチャ
             if edge_pulse && (cur_time[11:2] >: threshold) {
                 if have_prev_sync {
@@ -149,6 +165,51 @@ module test_adat_timing_tracker {
         $assert(sync_detect == 1'b1, "data should resume after sync");
         $assert(frame_time == 12'd1042, "initial frame time should be 1042");
 
+        $finish();
+    }
+}
+
+/// 入力停止がタイムスタンプ幅を越えても、再開エッジを短周期として誤認しないことを検証する。
+#[test(test_adat_timing_tracker_gap_recovery)]
+module test_adat_timing_tracker_gap_recovery {
+    inst clk: $tb::clock_gen;
+    inst rst: $tb::reset_gen ( clk );
+
+    var edge_pulse : logic    ;
+    var edge_time  : logic<12>;
+    var sync_detect: logic    ;
+    var frame_time : logic<12>;
+
+    inst dut: TimingTracker ( clk, rst, edge_pulse, edge_time, sync_detect, frame_time );
+
+    function pulse_edge (
+        gap_cycles: input logic<12>,
+    ) {
+        edge_pulse = 1'b0;
+        clk.next(gap_cycles);
+        edge_pulse = 1'b1;
+        clk.next(1);
+        edge_pulse = 1'b0;
+    }
+
+    initial {
+        edge_pulse = 1'b0;
+        rst.assert();
+
+        // 通常の短周期と同期期間を先に観測して閾値を確立する。
+        pulse_edge(12'd4);
+        pulse_edge(12'd40);
+        $assert(sync_detect == 1'b0, "long interval should be sync before gap");
+
+        // 12bitカウンタのwrapを越える停止後も、停止期間を同期として扱う。
+        clk.next(12'd2500);
+        $assert(sync_detect == 1'b0, "input gap must force sync state");
+        pulse_edge(12'd1);
+        $assert(sync_detect == 1'b0, "first edge after gap must remain sync");
+
+        // 次の通常周期でデータ期間へ復帰できる。
+        pulse_edge(12'd4);
+        $assert(sync_detect == 1'b1, "tracker must recover after input gap");
         $finish();
     }
 }
