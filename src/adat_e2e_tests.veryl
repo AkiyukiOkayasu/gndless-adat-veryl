@@ -7,16 +7,16 @@ import Types::AdatFamily;
 module AdatTxRxPath #(
     param ADAT_FAMILY: AdatFamily = AdatFamily::F48K,
 ) (
-    clk        : input  clock        ,
-    rst        : input  reset        ,
-    run        : input  bbool        ,
-    smux_active: input  bbool        ,
-    tx_channels: input  logic<24> [8],
-    adat       : output logic        ,
-    rx_smux    : output bbool        ,
-    rx_channels: output logic<24> [8],
-    rx_valid   : output logic        ,
-    rx_locked  : output bbool        ,
+    clk        : input   clock                                                                                ,
+    rst        : input   reset                                                                                ,
+    run        : input   bbool                                                                                ,
+    smux_active: input   bbool                                                                                ,
+    tx_channels: input   logic                                                                        <24> [8],
+    adat       : output  logic                                                                                ,
+    rx_smux    : output  bbool                                                                                ,
+    rx_channels: modport gndless_fixedpoint::FixedPointValue::<gndless_fixedpoint::Q1_23>::output_port     [8],
+    rx_valid   : output  logic                                                                                ,
+    rx_locked  : output  bbool                                                                                ,
 ) {
     var frame_clk_tx : logic;
     var frame_done   : logic;
@@ -66,16 +66,16 @@ module AdatTxRxPath #(
 
 /// 48kHz系と44.1kHz系のAdatTxを切り替えるpackage内E2E経路。
 module AdatTxRxRatePath (
-    clk        : input  clock        ,
-    rst        : input  reset        ,
-    run        : input  bbool        ,
-    use_44k1   : input  bbool        ,
-    tx_channels: input  logic<24> [8],
-    adat       : output logic        ,
-    rx_smux    : output bbool        ,
-    rx_channels: output logic<24> [8],
-    rx_valid   : output logic        ,
-    rx_locked  : output bbool        ,
+    clk        : input   clock                                                                                ,
+    rst        : input   reset                                                                                ,
+    run        : input   bbool                                                                                ,
+    use_44k1   : input   bbool                                                                                ,
+    tx_channels: input   logic                                                                        <24> [8],
+    adat       : output  logic                                                                                ,
+    rx_smux    : output  bbool                                                                                ,
+    rx_channels: modport gndless_fixedpoint::FixedPointValue::<gndless_fixedpoint::Q1_23>::output_port     [8],
+    rx_valid   : output  logic                                                                                ,
+    rx_locked  : output  bbool                                                                                ,
 ) {
     var frame_clk_48 : logic;
     var frame_clk_44 : logic;
@@ -165,20 +165,20 @@ module test_adat_tx_rx_rate_transition {
     inst clk: $tb::clock_gen;
     inst rst: $tb::reset_gen ( clk );
 
-    var run         : bbool        ;
-    var use_44k1    : bbool        ;
-    var tx_channels : logic<24> [8];
-    var adat        : logic        ;
-    var rx_smux     : bbool        ;
-    var rx_channels : logic<24> [8];
-    var rx_valid    : logic        ;
-    var rx_locked   : bbool        ;
-    var phase       : logic<2>     ;
-    var initial_lock: bbool        ;
-    var lock_44     : bbool        ;
-    var lock_48     : bbool        ;
-    var raw_44      : bbool        ;
-    var raw_48      : bbool        ;
+    var run        : bbool        ;
+    var use_44k1   : bbool        ;
+    var tx_channels: logic<24> [8];
+    var adat       : logic        ;
+    var rx_smux    : bbool        ;
+    inst rx_channels: gndless_fixedpoint::FixedPointValue::<gndless_fixedpoint::Q1_23> [8];
+    var rx_valid    : logic   ;
+    var rx_locked   : bbool   ;
+    var phase       : logic<2>;
+    var initial_lock: bbool   ;
+    var lock_44     : bbool   ;
+    var lock_48     : bbool   ;
+    var raw_44      : bbool   ;
+    var raw_48      : bbool   ;
 
     inst path: AdatTxRxRatePath (
         clk        : clk        ,
@@ -211,7 +211,7 @@ module test_adat_tx_rx_rate_transition {
                 if rx_locked {
                     lock_44 = true;
                     if rx_valid {
-                        $assert(rx_channels[0] == 24'h520001, "44.1k frame payload mismatch");
+                        $assert(rx_channels[0].raw == 24'h520001, "44.1k frame payload mismatch");
                     }
                 }
             }
@@ -222,7 +222,7 @@ module test_adat_tx_rx_rate_transition {
                 if rx_locked {
                     lock_48 = true;
                     if rx_valid {
-                        $assert(rx_channels[0] == 24'h530001, "final 48k frame payload mismatch");
+                        $assert(rx_channels[0].raw == 24'h530001, "final 48k frame payload mismatch");
                     }
                 }
             }
@@ -292,17 +292,17 @@ module test_adat_tx_rx_smux_recovery {
     inst clk: $tb::clock_gen;
     inst rst: $tb::reset_gen ( clk );
 
-    var run           : bbool        ;
-    var tx_channels   : logic<24> [8];
-    var adat          : logic        ;
-    var rx_smux       : bbool        ;
-    var rx_channels   : logic<24> [8];
-    var rx_valid      : logic        ;
-    var rx_locked     : bbool        ;
-    var locked_seen   : bbool        ;
-    var timeout_seen  : bbool        ;
-    var recovery_seen : bbool        ;
-    var recovery_valid: bbool        ;
+    var run        : bbool        ;
+    var tx_channels: logic<24> [8];
+    var adat       : logic        ;
+    var rx_smux    : bbool        ;
+    inst rx_channels: gndless_fixedpoint::FixedPointValue::<gndless_fixedpoint::Q1_23> [8];
+    var rx_valid      : logic;
+    var rx_locked     : bbool;
+    var locked_seen   : bbool;
+    var timeout_seen  : bbool;
+    var recovery_seen : bbool;
+    var recovery_valid: bbool;
 
     inst path: AdatTxRxPath #(
         ADAT_FAMILY: AdatFamily::F48K,
@@ -337,7 +337,7 @@ module test_adat_tx_rx_smux_recovery {
             if recovery_seen && rx_valid && rx_locked {
                 recovery_valid = true;
                 for i in 0..8 {
-                    $assert(rx_channels[i] == tx_channels[i], "recovered S/MUX physical channel mismatch");
+                    $assert(rx_channels[i].raw == tx_channels[i], "recovered S/MUX physical channel mismatch");
                 }
             }
         }

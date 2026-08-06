@@ -98,9 +98,9 @@ pub module AdatRx (
     smux_active: output bbool,
     /// 8チャンネルPCMデータ出力（ADAT物理スロット）。
     /// 注意: S/MUX有効時の論理チャンネル再構成は利用側の実装が必要
-    channels   : output logic<24> [8],
-    frame_valid: output logic        , /// 完全フレームcommitパルス
-    locked     : output bbool        , /// 同期ロック状態
+    channels   : modport gndless_fixedpoint::FixedPointValue::<gndless_fixedpoint::Q1_23>::output_port [8],
+    frame_valid: output  logic                                                                            , /// 完全フレームcommitパルス
+    locked     : output  bbool                                                                            , /// 同期ロック状態
 ) {
     // 内部信号
     var adat_edge  : logic    ;
@@ -214,11 +214,11 @@ module test_adat_loopback {
     var adat_loopback : logic        ;
     var frame_done_tx : logic        ;
 
-    var frame_clk_rx  : logic        ;
-    var smux_active_rx: bbool        ;
-    var channels_rx   : logic<24> [8];
-    var frame_valid_rx: logic        ;
-    var locked_rx     : bbool        ;
+    var frame_clk_rx  : logic;
+    var smux_active_rx: bbool;
+    inst channels_rx: gndless_fixedpoint::FixedPointValue::<gndless_fixedpoint::Q1_23> [8];
+    var frame_valid_rx: logic;
+    var locked_rx     : bbool;
 
     var sent_count     : logic<6>;
     var valid_count    : logic<6>;
@@ -308,8 +308,8 @@ module test_adat_loopback {
         $assert(valid_count >: 6'd0, "ADAT loopback frame_valid was never qualified");
         $assert(locked_seen == 1'b1, "ADAT loopback should lock");
         $assert(smux_active_rx == 1'b0, "ADAT loopback S/MUX flag mismatch");
-        $assert(channels_rx[0] == 24'h123456, "ADAT loopback CH0 mismatch");
-        $assert(channels_rx[7] == 24'h89ABCD, "ADAT loopback CH7 mismatch");
+        $assert(channels_rx[0].raw == 24'h123456, "ADAT loopback CH0 mismatch");
+        $assert(channels_rx[7].raw == 24'h89ABCD, "ADAT loopback CH7 mismatch");
         $finish();
     }
 }

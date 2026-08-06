@@ -19,19 +19,19 @@
 /// 完全フレームの周期安定を確認したときに`locked`をアサートする。
 /// 周期変化、S/MUX2 flag変化、frame欠落では解除し、再qualificationを行う。
 module OutputInterface (
-    clk        : input  clock        , /// システムクロック
-    rst        : input  reset        , /// リセット
-    frame_time : input  logic<12>    , /// フレーム時間
-    data       : input  logic<24>    , /// PCMデータ入力
-    channel    : input  logic<3>     , /// チャンネル番号
-    data_valid : input  logic        , /// データ有効
-    sync       : input  logic        , /// 同期マスク
-    user_bits  : input  logic<4>     , /// ユーザービット入力
-    smux_active: output bbool        , /// 検出されたS/MUX有効状態 (1: 有効, 0: 無効)
-    frame_clk  : output logic        , /// ADATフレーム周期のクロック出力（サンプルクロックではない）
-    channels   : output logic<24> [8], /// 8チャンネルPCMデータ出力
-    frame_valid: output logic        , /// 完全フレームcommitパルス
-    locked     : output bbool        , /// 同期ロック状態
+    clk        : input   clock                                                                                , /// システムクロック
+    rst        : input   reset                                                                                , /// リセット
+    frame_time : input   logic                                                                        <12>    , /// フレーム時間
+    data       : input   logic                                                                        <24>    , /// PCMデータ入力
+    channel    : input   logic                                                                        <3>     , /// チャンネル番号
+    data_valid : input   logic                                                                                , /// データ有効
+    sync       : input   logic                                                                                , /// 同期マスク
+    user_bits  : input   logic                                                                        <4>     , /// ユーザービット入力
+    smux_active: output  bbool                                                                                , /// 検出されたS/MUX有効状態 (1: 有効, 0: 無効)
+    frame_clk  : output  logic                                                                                , /// ADATフレーム周期のクロック出力（サンプルクロックではない）
+    channels   : modport gndless_fixedpoint::FixedPointValue::<gndless_fixedpoint::Q1_23>::output_port     [8], /// 8チャンネルPCMデータ出力
+    frame_valid: output  logic                                                                                , /// 完全フレームcommitパルス
+    locked     : output  bbool                                                                                , /// 同期ロック状態
 ) {
     // ワードクロックカウンタ
     var word_clk_cnt: logic<12>;
@@ -59,7 +59,7 @@ module OutputInterface (
 
     // チャンネル出力割り当て
     for i in 0..8 :g_ch_out {
-        assign channels[i] = channel_reg[i];
+        assign channels[i].raw = channel_reg[i];
     }
 
     // 完全frameのcommit eventだけをStreamLockQualifierへ渡す。
@@ -178,19 +178,19 @@ module test_adat_output_interface {
     inst clk: $tb::clock_gen;
     inst rst: $tb::reset_gen ( clk );
 
-    var frame_time     : logic<12>    ;
-    var data           : logic<24>    ;
-    var channel        : logic<3>     ;
-    var data_valid     : logic        ;
-    var sync           : logic        ;
-    var user_bits      : logic<4>     ;
-    var smux_active    : bbool        ;
-    var frame_clk      : logic        ;
-    var channels       : logic<24> [8];
-    var frame_valid    : logic        ;
-    var locked         : bbool        ;
-    var raw_seen       : logic        ;
-    var transition_seen: logic        ;
+    var frame_time : logic<12>;
+    var data       : logic<24>;
+    var channel    : logic<3> ;
+    var data_valid : logic    ;
+    var sync       : logic    ;
+    var user_bits  : logic<4> ;
+    var smux_active: bbool    ;
+    var frame_clk  : logic    ;
+    inst channels: gndless_fixedpoint::FixedPointValue::<gndless_fixedpoint::Q1_23> [8];
+    var frame_valid    : logic;
+    var locked         : bbool;
+    var raw_seen       : logic;
+    var transition_seen: logic;
 
     inst dut: OutputInterface (
         clk          ,
@@ -252,7 +252,7 @@ module test_adat_output_interface {
         push_channel(3'd1, 24'hBBBBBB);
         push_channel(3'd7, 24'hCCCCCC);
         $assert(frame_valid == 1'b0, "incomplete frame must not assert frame_valid");
-        $assert(channels[0] == 24'd0, "incomplete frame leaked channel 0");
+        $assert(channels[0].raw == 24'd0, "incomplete frame leaked channel 0");
 
         // 最初の完全frameはatomic commitされ、次cycleにraw pulseを公開する。
         push_channel(3'd0, 24'h100000);
@@ -269,8 +269,8 @@ module test_adat_output_interface {
         $assert(frame_valid == 1'b1, "complete frame must emit raw frame_valid");
         $assert(locked == 1'b0, "first frame must be visible before qualification");
         $assert(smux_active == 1'b1, "S/MUX flag mismatch");
-        $assert(channels[0] == 24'h100000, "channel 0 data mismatch");
-        $assert(channels[7] == 24'h7FFFFF, "channel 7 data mismatch");
+        $assert(channels[0].raw == 24'h100000, "channel 0 data mismatch");
+        $assert(channels[7].raw == 24'h7FFFFF, "channel 7 data mismatch");
 
         // 32個の安定interval後にqualifierがlockする。raw frame_validは
         // qualification中も各atomic commitで発生する。

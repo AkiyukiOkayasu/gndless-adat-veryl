@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- `AdatRx`の公開module境界のオーディオサンプルを`gndless_fixedpoint::FixedPointValue<Q1_23>[8]`へ変更し、`gndless_fixedpoint`を依存packageに追加
+
 ## [0.2.0] - 2026-08-02
 
 ### Added
