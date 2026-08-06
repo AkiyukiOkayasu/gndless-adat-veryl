@@ -16,3 +16,6 @@ target = { type = "directory", path = "target" }
 register = true
 bump_commit = true
 publish_commit = true
+
+[dependencies]
+gndless_fixedpoint = { github = "AkiyukiOkayasu/gndless-fixedpoint-veryl", version = "0.2.0" }
