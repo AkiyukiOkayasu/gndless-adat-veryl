@@ -22,6 +22,12 @@ module AdatTxRxPath #(
     var frame_done   : logic;
     var start_pending: bbool;
 
+    // raw入力portをQ1.23 interfaceへ載せてAdatTxへ接続する
+    inst tx_channels_if: gndless_fixedpoint::FixedPointValue::<gndless_fixedpoint::Q1_23> [8];
+    for i in 0..8 :g_tx {
+        assign tx_channels_if[i].raw = tx_channels[i];
+    }
+
     always_ff (clk, rst) {
         if_reset {
             frame_clk_tx  = 1'b0;
@@ -43,13 +49,13 @@ module AdatTxRxPath #(
         CLK_FREQ   : 50_000_000 ,
         ADAT_FAMILY: ADAT_FAMILY,
     ) (
-        clk        : clk         ,
-        rst        : rst         ,
-        frame_clk  : frame_clk_tx,
-        channels   : tx_channels ,
-        smux_active: smux_active ,
-        adat       : adat        ,
-        frame_done : frame_done  ,
+        clk        : clk           ,
+        rst        : rst           ,
+        frame_clk  : frame_clk_tx  ,
+        channels   : tx_channels_if,
+        smux_active: smux_active   ,
+        adat       : adat          ,
+        frame_done : frame_done    ,
     );
 
     inst rx: AdatRx (
@@ -85,6 +91,12 @@ module AdatTxRxRatePath (
     var pending_44   : bbool;
     var adat_48      : logic;
     var adat_44      : logic;
+
+    // raw入力portをQ1.23 interfaceへ載せてAdatTxへ接続する
+    inst tx_channels_if: gndless_fixedpoint::FixedPointValue::<gndless_fixedpoint::Q1_23> [8];
+    for i in 0..8 :g_tx {
+        assign tx_channels_if[i].raw = tx_channels[i];
+    }
 
     always_ff (clk, rst) {
         if_reset {
@@ -123,26 +135,26 @@ module AdatTxRxRatePath (
         CLK_FREQ   : 50_000_000      ,
         ADAT_FAMILY: AdatFamily::F48K,
     ) (
-        clk        : clk          ,
-        rst        : rst          ,
-        frame_clk  : frame_clk_48 ,
-        channels   : tx_channels  ,
-        smux_active: false        ,
-        adat       : adat_48      ,
-        frame_done : frame_done_48,
+        clk        : clk           ,
+        rst        : rst           ,
+        frame_clk  : frame_clk_48  ,
+        channels   : tx_channels_if,
+        smux_active: false         ,
+        adat       : adat_48       ,
+        frame_done : frame_done_48 ,
     );
 
     inst tx_44: AdatTx #(
         CLK_FREQ   : 50_000_000       ,
         ADAT_FAMILY: AdatFamily::F44K1,
     ) (
-        clk        : clk          ,
-        rst        : rst          ,
-        frame_clk  : frame_clk_44 ,
-        channels   : tx_channels  ,
-        smux_active: false        ,
-        adat       : adat_44      ,
-        frame_done : frame_done_44,
+        clk        : clk           ,
+        rst        : rst           ,
+        frame_clk  : frame_clk_44  ,
+        channels   : tx_channels_if,
+        smux_active: false         ,
+        adat       : adat_44       ,
+        frame_done : frame_done_44 ,
     );
 
     assign adat = if use_44k1 ? adat_44 : adat_48;

@@ -4,7 +4,11 @@
 
 ### Changed
 
-- `AdatRx`の公開module境界のオーディオサンプルを`gndless_fixedpoint::FixedPointValue<Q1_23>[8]`へ変更し、`gndless_fixedpoint`を依存packageに追加
+- 破壊的変更: `AdatRx`の公開module境界のオーディオサンプルを`gndless_fixedpoint::FixedPointValue<Q1_23>[8]`へ変更し、`gndless_fixedpoint`を依存packageに追加
+- 破壊的変更: `AdatTx`の`channels`入力も`gndless_fixedpoint::FixedPointValue<Q1_23>`境界へ変更
+- 破壊的変更: `Smux2Unpacker`の`channels`/`samples`も`gndless_fixedpoint::FixedPointValue<Q1_23>`境界へ変更し、`AdatRx`出力へ直接接続できるようにした。`SAMPLE_WIDTH` parameterを廃止
+- 破壊的変更: `Smux2Packer`の`samples`/`channels`も`gndless_fixedpoint::FixedPointValue<Q1_23>`境界へ変更し、`AdatTx`入力へ直接接続できるようにした。`SAMPLE_WIDTH` parameterを廃止
+- `AdatRx`→`Smux2Unpacker`の直接接続をloopback testへ追加
 
 ## [0.2.0] - 2026-08-02
 

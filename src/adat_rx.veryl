@@ -18,7 +18,8 @@ import Types::AdatFamily;
 ///
 /// # S/MUX時のチャンネルマッピング（別moduleまたは利用側で実装）
 /// 本モジュールは `channels[0..7]` を物理スロットとして出力し、S/MUXの論理チャンネル再構成は行わない。
-/// S/MUX2受信では、出力を `Smux2Unpacker`へ接続して4chの高速sample列へ戻す。
+/// `channels`は`gndless_fixedpoint::FixedPointValue::<gndless_fixedpoint::Q1_23>`境界で、raw値は`channels[i].raw`から得る。
+/// S/MUX2受信では、出力を `Smux2Unpacker`へ直接接続して4chの高速sample列へ戻す。
 /// `Smux2Packer`は送信側で4ch sample列を8物理スロットへ並べるmoduleであり、受信後の再構成には使用しない。
 ///
 /// - S/MUX2 (96kHz / 88.2kHz, 4ch)
@@ -70,6 +71,7 @@ import Types::AdatFamily;
 ///
 /// # Examples
 /// ```veryl
+/// inst audio: gndless_fixedpoint::FixedPointValue::<gndless_fixedpoint::Q1_23> [8];
 /// inst adat: AdatRx (
 ///     clk        : sys_clk_50mhz,
 ///     rst        : reset,
@@ -208,17 +210,22 @@ module test_adat_loopback {
     inst clk: $tb::clock_gen;
     inst rst: $tb::reset_gen ( clk );
 
-    var frame_clk_tx  : logic        ;
-    var channels_tx   : logic<24> [8];
-    var smux_active_tx: bbool        ;
-    var adat_loopback : logic        ;
-    var frame_done_tx : logic        ;
+    var frame_clk_tx: logic;
+    inst channels_tx: gndless_fixedpoint::FixedPointValue::<gndless_fixedpoint::Q1_23> [8];
+    var smux_active_tx: bbool;
+    var adat_loopback : logic;
+    var frame_done_tx : logic;
 
     var frame_clk_rx  : logic;
     var smux_active_rx: bbool;
     inst channels_rx: gndless_fixedpoint::FixedPointValue::<gndless_fixedpoint::Q1_23> [8];
     var frame_valid_rx: logic;
     var locked_rx     : bbool;
+
+    var unpacked_valid: logic;
+    inst unpacker_samples: gndless_fixedpoint::FixedPointValue::<gndless_fixedpoint::Q1_23> [4];
+    var first_set_seen : bbool;
+    var second_set_seen: bbool;
 
     var sent_count     : logic<6>;
     var valid_count    : logic<6>;
@@ -251,25 +258,37 @@ module test_adat_loopback {
         locked     : locked_rx     ,
     );
 
+    // ドキュメントの接続パターンどおり、AdatRx出力をSmux2Unpackerへ直接接続する境界検証。
+    inst unpacker: Smux2Unpacker (
+        clk         : clk             ,
+        rst         : rst             ,
+        channels    : channels_rx     ,
+        frame_valid : frame_valid_rx  ,
+        samples     : unpacker_samples,
+        sample_valid: unpacked_valid  ,
+    );
+
     // TX完了イベントで次フレームを開始し、RXの完了フレーム数を記録する
     always_ff (clk, rst) {
         if_reset {
-            frame_clk_tx    = 1'b0;
-            smux_active_tx  = 1'b0;
-            channels_tx[0]  = 24'h123456;
-            channels_tx[1]  = 24'h234567;
-            channels_tx[2]  = 24'h345678;
-            channels_tx[3]  = 24'h456789;
-            channels_tx[4]  = 24'h56789A;
-            channels_tx[5]  = 24'h6789AB;
-            channels_tx[6]  = 24'h789ABC;
-            channels_tx[7]  = 24'h89ABCD;
-            sent_count      = 6'd0;
-            valid_count     = 6'd0;
-            done_count      = 6'd0;
-            frame_done_seen = 1'b0;
-            locked_seen     = 1'b0;
-            complete        = 1'b0;
+            frame_clk_tx       = 1'b0;
+            smux_active_tx     = 1'b0;
+            channels_tx[0].raw = 24'h123456;
+            channels_tx[1].raw = 24'h234567;
+            channels_tx[2].raw = 24'h345678;
+            channels_tx[3].raw = 24'h456789;
+            channels_tx[4].raw = 24'h56789A;
+            channels_tx[5].raw = 24'h6789AB;
+            channels_tx[6].raw = 24'h789ABC;
+            channels_tx[7].raw = 24'h89ABCD;
+            sent_count         = 6'd0;
+            valid_count        = 6'd0;
+            done_count         = 6'd0;
+            frame_done_seen    = 1'b0;
+            locked_seen        = 1'b0;
+            complete           = 1'b0;
+            first_set_seen     = 1'b0;
+            second_set_seen    = 1'b0;
         } else {
             frame_clk_tx = 1'b0;
 
@@ -296,6 +315,22 @@ module test_adat_loopback {
             if done_count == 6'd40 {
                 complete = 1'b1;
             }
+            if unpacked_valid {
+                // 送信ch値は全frameで一定。先行サンプル列 {ch0,ch2,ch4,ch6} と
+                // 後続サンプル列 {ch1,ch3,ch5,ch7} の両方が観測されることを確認する。
+                if unpacker_samples[0].raw == 24'h123456 {
+                    first_set_seen = 1'b1;
+                    $assert(unpacker_samples[1].raw == 24'h345678, "unpacked CH1 first mismatch");
+                    $assert(unpacker_samples[2].raw == 24'h56789A, "unpacked CH2 first mismatch");
+                    $assert(unpacker_samples[3].raw == 24'h789ABC, "unpacked CH3 first mismatch");
+                } else {
+                    second_set_seen = 1'b1;
+                    $assert(unpacker_samples[0].raw == 24'h234567, "unpacked CH0 second mismatch");
+                    $assert(unpacker_samples[1].raw == 24'h456789, "unpacked CH1 second mismatch");
+                    $assert(unpacker_samples[2].raw == 24'h6789AB, "unpacked CH2 second mismatch");
+                    $assert(unpacker_samples[3].raw == 24'h89ABCD, "unpacked CH3 second mismatch");
+                }
+            }
         }
     }
 
@@ -307,6 +342,8 @@ module test_adat_loopback {
         $assert(complete == 1'b1, "ADAT loopback did not complete");
         $assert(valid_count >: 6'd0, "ADAT loopback frame_valid was never qualified");
         $assert(locked_seen == 1'b1, "ADAT loopback should lock");
+        $assert(first_set_seen == 1'b1, "Smux2Unpacker first sample set not seen");
+        $assert(second_set_seen == 1'b1, "Smux2Unpacker second sample set not seen");
         $assert(smux_active_rx == 1'b0, "ADAT loopback S/MUX flag mismatch");
         $assert(channels_rx[0].raw == 24'h123456, "ADAT loopback CH0 mismatch");
         $assert(channels_rx[7].raw == 24'h89ABCD, "ADAT loopback CH7 mismatch");

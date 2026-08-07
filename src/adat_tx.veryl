@@ -3,6 +3,8 @@ import Types::AdatFamily;
 /// ADAT TXトップモジュール
 ///
 /// 8ch 24bit PCMをADATフレームへ変換し、NRZI信号として出力
+/// `channels`は`gndless_fixedpoint::FixedPointValue::<gndless_fixedpoint::Q1_23>`境界で、raw値は`channels[i].raw`から得る。
+/// `AdatRx`の`channels`出力とは同じformatのため、`Smux2Unpacker`と同様に利用側でQ1.23 interfaceを共有できる。
 ///
 /// # 実機確認状況
 /// 実機動作は未確認。現時点ではNative testと、RTL内部で接続した`AdatTx`→`AdatRx` loopback testだけを確認している。
@@ -38,13 +40,13 @@ pub module AdatTx #(
     param CLK_FREQ   : u32        = 50_000_000      , /// システムクロック周波数 [Hz]
     param ADAT_FAMILY: AdatFamily = AdatFamily::F48K, /// ADATビットレートファミリー (44.1kHz系 or 48kHz系)
 ) (
-    clk        : input  clock        , /// システムクロック (50MHz)
-    rst        : input  reset        , /// リセット
-    frame_clk  : input  logic        , /// 外部フレームクロック立ち上がりで新規フレーム送信開始
-    channels   : input  logic<24> [8], /// 8ch 24bit PCM入力
-    smux_active: input  bbool        , /// S/MUX有効フラグ入力
-    adat       : output logic        , /// ADAT NRZI出力
-    frame_done : output logic        , /// 256bitフレーム送信完了パルス
+    clk        : input   clock                                                                           ,
+    rst        : input   reset                                                                           ,
+    frame_clk  : input   logic                                                                           , /// 外部フレームクロック立ち上がりで新規フレーム送信開始
+    channels   : modport gndless_fixedpoint::FixedPointValue::<gndless_fixedpoint::Q1_23>::input_port [8],
+    smux_active: input   bbool                                                                           , /// S/MUX有効フラグ入力
+    adat       : output  logic                                                                           , /// ADAT NRZI出力
+    frame_done : output  logic                                                                           , /// 256bitフレーム送信完了パルス
 ) {
     var frame_build_pulse: logic     ;
     var frame_data       : logic<256>;
@@ -52,6 +54,13 @@ pub module AdatTx #(
     var serial_bit       : logic     ;
     var serial_bit_valid : logic     ;
     var serial_frame_done: logic     ;
+
+    // Gowin合成はprocedural forでinterface配列要素を定数選択できないため、
+    // 入力interfaceはgenerate assignでraw配列へ展開する。
+    var channels_raw: gndless_fixedpoint::Q1_23::Raw [8];
+    for i in 0..8 :g_ch {
+        assign channels_raw[i] = channels[i].raw;
+    }
 
     assign frame_done = serial_frame_done;
 
@@ -84,7 +93,7 @@ pub module AdatTx #(
     inst u_frame_builder: FrameBuilder (
         clk                         ,
         rst                         ,
-        channels                    ,
+        channels : channels_raw     ,
         user_bits: user_bits        ,
         build    : frame_build_pulse,
         frame    : frame_data       ,

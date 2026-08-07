@@ -2,6 +2,8 @@
 ///
 /// `sample_valid`を96kHz側のサンプル受理パルス、`frame_valid`を48kHz側のADATフレーム受理パルスとして使う。
 /// 2つの入力サンプルを1フレームにまとめ、各チャンネルの先行サンプルを偶数スロット、後続サンプルを奇数スロットへ配置する。
+/// `samples`と`channels`は`gndless_fixedpoint::FixedPointValue::<gndless_fixedpoint::Q1_23>`境界であり、
+/// `AdatTx`の`channels`入力へ直接接続できる。
 ///
 /// 次図では、`A`と`B`が時間順に連続する4ch sample setを表す。
 /// `sample_valid`を受理した2回目の立ち上がり後に`channels`を更新し、`frame_valid`をシステムクロック1周期だけHighにする。
@@ -17,18 +19,17 @@
 ///   ]
 /// }
 /// ```
-pub module Smux2Packer #(
-    param SAMPLE_WIDTH: u32 = 24, /// サンプルのビット幅
-) (
-    clk         : input  clock                  , /// システムクロック
-    rst         : input  reset                  , /// リセット
-    sample_valid: input  logic                  , /// 高速サンプル受理パルス
-    samples     : input  logic<SAMPLE_WIDTH> [4], /// 4チャンネルの高速サンプル
-    channels    : output logic<SAMPLE_WIDTH> [8], /// S/MUX物理スロット列
-    frame_valid : output logic                  , /// フレーム更新パルス
+pub module Smux2Packer (
+    clk         : input   clock                                                                            ,
+    rst         : input   reset                                                                            ,
+    sample_valid: input   logic                                                                            , /// 高速サンプル受理パルス
+    samples     : modport gndless_fixedpoint::FixedPointValue::<gndless_fixedpoint::Q1_23>::input_port  [4],
+    channels    : modport gndless_fixedpoint::FixedPointValue::<gndless_fixedpoint::Q1_23>::output_port [8],
+    frame_valid : output  logic                                                                            , /// フレーム更新パルス
 ) {
-    var first_samples: logic<SAMPLE_WIDTH> [4];
-    var have_first   : logic                  ;
+    var first_samples: gndless_fixedpoint::Q1_23::Raw [4];
+    var channels_reg : gndless_fixedpoint::Q1_23::Raw [8];
+    var have_first   : logic                             ;
 
     always_ff {
         if_reset {
@@ -36,14 +37,14 @@ pub module Smux2Packer #(
             first_samples[1] = 0;
             first_samples[2] = 0;
             first_samples[3] = 0;
-            channels[0]      = 0;
-            channels[1]      = 0;
-            channels[2]      = 0;
-            channels[3]      = 0;
-            channels[4]      = 0;
-            channels[5]      = 0;
-            channels[6]      = 0;
-            channels[7]      = 0;
+            channels_reg[0]  = 0;
+            channels_reg[1]  = 0;
+            channels_reg[2]  = 0;
+            channels_reg[3]  = 0;
+            channels_reg[4]  = 0;
+            channels_reg[5]  = 0;
+            channels_reg[6]  = 0;
+            channels_reg[7]  = 0;
             have_first       = 1'b0;
             frame_valid      = 1'b0;
         } else {
@@ -51,24 +52,28 @@ pub module Smux2Packer #(
 
             if sample_valid {
                 if !have_first {
-                    first_samples[0] = samples[0];
-                    first_samples[1] = samples[1];
-                    first_samples[2] = samples[2];
-                    first_samples[3] = samples[3];
+                    first_samples[0] = samples[0].raw;
+                    first_samples[1] = samples[1].raw;
+                    first_samples[2] = samples[2].raw;
+                    first_samples[3] = samples[3].raw;
                     have_first       = 1'b1;
                 } else {
-                    channels[0] = first_samples[0];
-                    channels[1] = samples[0];
-                    channels[2] = first_samples[1];
-                    channels[3] = samples[1];
-                    channels[4] = first_samples[2];
-                    channels[5] = samples[2];
-                    channels[6] = first_samples[3];
-                    channels[7] = samples[3];
-                    have_first  = 1'b0;
-                    frame_valid = 1'b1;
+                    channels_reg[0] = first_samples[0];
+                    channels_reg[1] = samples[0].raw;
+                    channels_reg[2] = first_samples[1];
+                    channels_reg[3] = samples[1].raw;
+                    channels_reg[4] = first_samples[2];
+                    channels_reg[5] = samples[2].raw;
+                    channels_reg[6] = first_samples[3];
+                    channels_reg[7] = samples[3].raw;
+                    have_first      = 1'b0;
+                    frame_valid     = 1'b1;
                 }
             }
         }
+    }
+
+    for i in 0..8 :g_out {
+        assign channels[i].raw = channels_reg[i];
     }
 }
