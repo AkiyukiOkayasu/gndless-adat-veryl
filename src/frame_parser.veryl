@@ -106,9 +106,13 @@ module FrameParser (
             // フレーム構造: [Sync 10bit][1][User 4bit][1][Ch0 30bit]...[Ch7 30bit]
             // 本実装は同期期間をフレーム境界として扱い、Sync 10bitはカウントしない。
             // したがって、内部カウンタ上のチャンネル終了位置は35 + 30 * channelとなる。
-            if bit_counter <: 8'd5 && next_count >: 8'd4 {
-                // ユーザーデータ: bits 1-4 (ビット順を反転)
-                r_user  = {shift_next[0], shift_next[1], shift_next[2], shift_next[3]};
+            if bit_counter <: 8'd4 && next_count >= 8'd4 {
+                // ユーザーデータ: データ期間の先頭4bit (b1..b4 = 送信順のuser bit 1-4)。
+                // 抽出時点のカウンタ位置から相対参照するため、グループ境界に依存しない。
+                r_user  = {
+                    shift_next[next_count - 4], shift_next[next_count - 3], shift_next[next_count - 2],
+                    shift_next[next_count - 1],
+                };
                 r_valid = 1'b0;
             } else {
                 // 30bit -> 24bit: 各5bitのnibbleから上位4bitを抽出する
@@ -188,9 +192,15 @@ module test_adat_frame_parser {
         sync      = 1'b1;
         rst.assert();
 
-        // User=0xA。先頭のseparatorを含む反転済み入力
-        push_bits(5'b10101, 3'd5);
-        $assert(user_bits == 4'hA, "user bits mismatch");
+        // ユーザーデータ: データ期間の先頭4bit (送信順 b1..b4) をそのまま抽出する。
+        // 送信順2番目=1 (S/MUX2フラグ位置、RME実測と一致) の非対称パターンで検証する。
+        push_bits(5'b00000, 3'd1); // b1 = 0
+        push_bits(5'b00001, 3'd1); // b2 = 1 (S/MUX2フラグ)
+        push_bits(5'b00000, 3'd1); // b3 = 0
+        push_bits(5'b00000, 3'd1); // b4 = 0
+        push_bits(5'b00001, 3'd1); // b5 = separator (ヘッダ完結)
+        $assert(user_bits == 4'b0010, "user bits mismatch");
+        $assert(user_bits[1] == 1'b1, "S/MUX2 flag (user bit 2) mismatch");
 
         // 同じPCM値を全8チャンネルへ送り、チャンネル抽出と番号を検証する
         for i in 0..8 {
