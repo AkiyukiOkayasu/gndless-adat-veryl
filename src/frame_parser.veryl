@@ -31,6 +31,12 @@
 /// - 本モジュールは `bits[0]` から順に shift へ取り込むため、取り込み時点では nibble 内ビット並びが反転して見える
 /// - ただし抽出位置を固定して24bit語へ再構成するため、最終 `data` のビット有意性は `data[23]` がMSB、`data[0]` がLSBで一定
 /// - `data` は24bit単一ベクタであり、byte order（エンディアン）に依存しない
+///
+/// # ユーザーデータの並び
+/// `user_bits[0..3]` はデータ期間の先頭4bit（= 送信順のuser bit 1-4）をそのまま出力する。
+/// S/MUX2 (88.2/96kHz) は送信順2番目のuser bit (`user_bits[1]`) が1になる。
+/// S/MUX4 (176.4/192kHz) はuser bitが全0のためフラグを持たない (RME ADI-8 DS
+/// マニュアル "No S/MUX4 Flag")。
 module FrameParser (
     clk       : input  clock    , /// システムクロック
     rst       : input  reset    , /// リセット

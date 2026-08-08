@@ -2,10 +2,15 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- `FrameParser`のuser bit抽出窓が1ビット遅れており、送信順2番目のuser bit (S/MUX2フラグ = U2) が`user_bits[0]`へ落ちて検出されなかった。抽出をデータ期間の先頭4bit (`{b1..b4}`) へ修正し、`AdatTx`のフラグ位置も送信順2番目 (`4'b0100`) へ合わせた。ロジアナ実測 (RME Babyface Pro 96kHz S/MUX2: user bits = [0,1,0,0]) と4パターン回転実験で確認済み
+
 ### Changed
 
 - 破壊的変更: `FrameBuilder`と`BitSerializer`を統合し、`AdatFrameSerializer`へ置換。256-bitフレームの二重保持を単一shift registerへ統合し、可変index muxをMSB出力＋shiftへ、bit timingの除算を同一edge列を生成する剰余累積へ変更。旧実装とのcycle単位等価性をequivalence testで検証
 - `AdatRx`の`synchronizer_basic`へ`WIDTH: 1`を明示し、1-bit信号の既定8-bit化を解消
+- S/MUXドキュメントを実測に基づき修正: S/MUX2 (88.2/96kHz) のみUserBit U2 (送信順2番目) が立ち、S/MUX4 (176.4/192kHz) はuser bitが全0でフラグを持たない (RME ADI-8 DSマニュアル "No S/MUX4 Flag")。S/MUX4はユーザー側のクロック/レート設定が必要
 
 ## [0.3.0] - 2026-08-07
 

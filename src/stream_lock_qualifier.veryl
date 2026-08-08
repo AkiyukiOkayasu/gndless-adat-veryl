@@ -8,9 +8,11 @@
 /// であり、量子化ジッターと緩やかなクロックドリフトを
 /// 吸収しながら、44.1kHzと48kHzの切替やframe欠落をロック解除として扱う。
 ///
-/// ADATストリームからS/MUX2とS/MUX4は判別できないため、smux_activeは
-/// User bitの状態をそのままS/MUX2として扱う。S/MUX4の接続は利用側で
-/// 禁止すること。
+/// smux_activeはUserBit2 (送信順で2番目のuser bit) の状態をそのままS/MUX2として扱う。
+/// UserBit2はS/MUX2 (88.2/96kHz) のときだけ1になり、S/MUX4 (176.4/192kHz) では
+/// user bitが全0のため検出できない (RME ADI-8 DSマニュアル "No S/MUX4 Flag")。
+/// S/MUX4の受信にはユーザー側のクロック/レート設定が必要で、ADATストリームの
+/// タイミングからはS/MUX2と判別できない。
 module StreamLockQualifier (
     clk        : input  clock    , /// システムクロック
     rst        : input  reset    , /// リセット

@@ -28,7 +28,7 @@ bit数           11             5           30                    180           
 | ---: | :---: | --- |
 | 0–9 | `frame[255:246]` | SYNCの0を10bit |
 | 10 | `frame[245]` | SYNC separator = 1 |
-| 11–14 | `frame[244:241]` | User bit U3→U0 |
+| 11–14 | `frame[244:241]` | User bit U3→U0（送信順: U3が先頭。S/MUX2フラグはU2 = 送信順2番目） |
 | 15 | `frame[240]` | User separator = 1 |
 | 16–45 | `frame[239:210]` | CH0 |
 | 46–75 | `frame[209:180]` | CH1 |
@@ -53,7 +53,14 @@ SYNC以外ではseparatorによってNRZI信号に5bitごとの遷移が生じ�
 
 ### S/MUX
 
-S/MUX flagは常にS/MUX2として扱い、論理channel再構成は`Smux2Packer`、`Smux2Unpacker`または利用側の回路で行います。ADATストリームからS/MUX2かS/MUX4は判別できません。S/MUX4が使われることはほぼないためサポートしません。
+S/MUX2 (88.2/96kHz) はUserBit U2（送信順で2番目のuser bit）によって検出します。
+`AdatRx.smux_active`はこのU2をS/MUX2としてそのまま出力します（S/MUX2時のみ1）。
+論理channel再構成は`Smux2Packer`、`Smux2Unpacker`または利用側の回路で行います。
+
+S/MUX4 (176.4/192kHz) はuser bitフラグを持ちません（全user bitが0。RME ADI-8 DS
+マニュアル "No S/MUX4 Flag" 参照）。ADATストリームのタイミングからもS/MUX2と
+判別できないため、S/MUX4の受信にはユーザー側のクロック/レート設定が必要です。
+本実装の`smux_active`はS/MUX4を検出しません。
 192kHzが必要な場合はAES3とS/PDIF実装がある[gndless-iec60958](https://github.com/AkiyukiOkayasu/gndless-iec60958-veryl)を利用してください。
 
 ## Examples

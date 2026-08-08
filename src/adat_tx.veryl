@@ -63,8 +63,12 @@ pub module AdatTx #(
     // TimecodeやMIDIなどのユーザーデータは常に0とする
     // シリアライザはuser_bitsをMSB-firstで送るため、bit[2] = 送信順で2番目のuser bit。
     // Alesis 2X Sample Rate (96kHz)仕様のS/MUX2フラグ位置 (RME実装と一致)。
+    // S/MUX2 (88.2/96kHz) のときだけsmux_activeを1にしてこのフラグを立てる。
+    // S/MUX4 (176.4/192kHz) はuser bitフラグを持たない (全0) ため、smux_activeは
+    // 0のままにし、受信側はユーザー設定のクロック/レートでS/MUX4を判別する
+    // (RME ADI-8 DSマニュアル "No S/MUX4 Flag")。
     // - bit[3] (1番目): 常に0
-    // - bit[2] (2番目): S/MUXフラグはsmux_activeに従う
+    // - bit[2] (2番目): S/MUX2フラグはsmux_activeに従う
     // - bit[1] (3番目): 常に0
     // - bit[0] (4番目): 常に0
     var user_bits: logic<4>;

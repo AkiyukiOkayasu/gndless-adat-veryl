@@ -13,8 +13,13 @@ import Types::AdatFamily;
 /// - 48kHz: 8チャンネル
 /// - 96kHz: 4チャンネル (S/MUX2)
 ///
-/// S/MUX4はADATストリームからS/MUX2と判別できないため対応しない。
-/// S/MUX4機器は接続しないこと。
+/// # S/MUXの検出とS/MUX4の扱い
+/// S/MUX2 (88.2/96kHz) はUserBit2 (送信順で2番目のuser bit) によってのみ検出できる。
+/// S/MUX4 (176.4/192kHz) はuser bitフラグを持たない (全user bitが0、RME ADI-8 DS
+/// マニュアル "No S/MUX4 Flag" 参照)。ADATストリームのタイミングからも判別できないため、
+/// S/MUX4の受信にはユーザー側のクロック/レート設定が必要であり、本モジュール単体では
+/// S/MUX4をS/MUX2として誤検出・誤デコードする可能性がある。S/MUX4機器を接続する場合は
+/// 利用側でモードを明示制御すること。
 ///
 /// # S/MUX時のチャンネルマッピング（別moduleまたは利用側で実装）
 /// 本モジュールは `channels[0..7]` を物理スロットとして出力し、S/MUXの論理チャンネル再構成は行わない。
@@ -95,8 +100,10 @@ pub module AdatRx (
     /// 通常は44.1/48kHz。
     /// warning: S/MUX有効時でも44.1kHz/48kHzが出力されることに注意。
     frame_clk: output logic,
-    /// UserBit2に基づくS/MUX2状態 (1: enabled, 0: disabled)。
-    /// S/MUX4とは判別できないため、S/MUX4機器は接続しないこと。
+    /// UserBit2 (送信順で2番目のuser bit) に基づくS/MUX2状態 (1: enabled, 0: disabled)。
+    /// S/MUX2 (88.2/96kHz) のときだけ1になる。S/MUX4 (176.4/192kHz) はuser bitが全0のため
+    /// このフラグでは検出できず、ユーザー側のクロック/レート設定が必要 (RME ADI-8 DS
+    /// マニュアル "No S/MUX4 Flag" 参照)。
     smux_active: output bbool,
     /// 8チャンネルPCMデータ出力（ADAT物理スロット）。
     /// 注意: S/MUX有効時の論理チャンネル再構成は利用側の実装が必要

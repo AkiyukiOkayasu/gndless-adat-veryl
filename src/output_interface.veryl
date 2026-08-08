@@ -1,9 +1,11 @@
 /// 完全ADATフレームの出力インターフェース
 ///
 /// 受信途中のチャンネルをworking bufferへ隔離し、channel 0から7まで
-/// 順序どおりそろった場合だけ8chを一括commitする。S/MUX flagはUser bit
-/// の値をS/MUX2として扱う。ADATストリームからS/MUX4は判別できないため、
-/// S/MUX4の接続は利用側で禁止すること。
+/// 順序どおりそろった場合だけ8chを一括commitする。S/MUX flagはUserBit2
+/// (送信順で2番目のuser bit) の値をS/MUX2として扱う。
+/// S/MUX2 (88.2/96kHz) のときだけUserBit2が1になる。S/MUX4 (176.4/192kHz)
+/// はuser bitが全0のため検出できず (RME ADI-8 DSマニュアル "No S/MUX4 Flag")、
+/// ユーザー側のクロック/レート設定が必要である。
 ///
 /// # フレームクロック
 /// ADATフレーム周期のクロック（サンプルクロックではない）。
