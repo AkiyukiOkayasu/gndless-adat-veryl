@@ -2,6 +2,9 @@
 
 ADAT opticalの8ch受信・送信とS/MUX2 pack/unpackのRTL実装です。
 
+ADATインターフェース自体の基本仕様（フレーム構造・物理仕様・UserBit・S/MUX）は
+[ADAT-SPEC.md](ADAT-SPEC.md) にまとめています。
+
 依存はVeryl stdのみ。
 
 ## 実機確認状況
@@ -57,10 +60,10 @@ S/MUX2 (88.2/96kHz) はUserBit U2（送信順で2番目のuser bit）によっ�
 `AdatRx.smux_active`はこのU2をS/MUX2としてそのまま出力します（S/MUX2時のみ1）。
 論理channel再構成は`Smux2Packer`、`Smux2Unpacker`または利用側の回路で行います。
 
-S/MUX4 (176.4/192kHz) はuser bitフラグを持ちません（全user bitが0。RME ADI-8 DS
-マニュアル "No S/MUX4 Flag" 参照）。ADATストリームのタイミングからもS/MUX2と
-判別できないため、S/MUX4の受信にはユーザー側のクロック/レート設定が必要です。
-本実装の`smux_active`はS/MUX4を検出しません。
+S/MUX4 (176.4/192kHz) は**公式仕様が存在しない（未定義）**デファクト実装で、user bitフラグも
+持ちません（全user bitが0。RME ADI-8 DSマニュアル "No S/MUX4 Flag" 参照）。ADATストリームの
+タイミングからもS/MUX2と判別できないため、S/MUX4の受信にはユーザー側のクロック/レート設定が
+必要です。本実装の`smux_active`はS/MUX4を検出しません。
 192kHzが必要な場合はAES3とS/PDIF実装がある[gndless-iec60958](https://github.com/AkiyukiOkayasu/gndless-iec60958-veryl)を利用してください。
 
 ## Examples

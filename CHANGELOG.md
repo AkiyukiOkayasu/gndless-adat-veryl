@@ -11,6 +11,7 @@
 - 破壊的変更: `FrameBuilder`と`BitSerializer`を統合し、`AdatFrameSerializer`へ置換。256-bitフレームの二重保持を単一shift registerへ統合し、可変index muxをMSB出力＋shiftへ、bit timingの除算を同一edge列を生成する剰余累積へ変更。旧実装とのcycle単位等価性をequivalence testで検証
 - `AdatRx`の`synchronizer_basic`へ`WIDTH: 1`を明示し、1-bit信号の既定8-bit化を解消
 - S/MUXドキュメントを実測に基づき修正: S/MUX2 (88.2/96kHz) のみUserBit U2 (送信順2番目) が立ち、S/MUX4 (176.4/192kHz) はuser bitが全0でフラグを持たない (RME ADI-8 DSマニュアル "No S/MUX4 Flag")。S/MUX4はユーザー側のクロック/レート設定が必要
+- ADATインターフェースの基本仕様をまとめた[ADAT-SPEC.md](ADAT-SPEC.md)を追加 (フレーム構造・物理仕様・UserBit・S/MUX)。S/MUX4は公式仕様が存在しない (未定義) デファクト実装であることも明記
 
 ## [0.3.0] - 2026-08-07
 
