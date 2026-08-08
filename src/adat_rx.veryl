@@ -119,7 +119,9 @@ pub module AdatRx (
     var data_valid: logic    ;
 
     // 非同期ADAT入力の同期化
-    inst u_sync: $std::synchronizer_basic (
+    inst u_sync: $std::synchronizer_basic #(
+        WIDTH: 1,
+    ) (
         i_clk: clk   ,
         i_rst: rst   ,
         i_d  : adat  ,
