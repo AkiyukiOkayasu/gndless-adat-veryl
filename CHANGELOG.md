@@ -1,5 +1,12 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- 破壊的変更: `FrameBuilder`と`BitSerializer`を統合し、`AdatFrameSerializer`へ置換。256-bitフレームの二重保持を単一shift registerへ統合し、可変index muxをMSB出力＋shiftへ、bit timingの除算を同一edge列を生成する剰余累積へ変更。旧実装とのcycle単位等価性をequivalence testで検証
+- `AdatRx`の`synchronizer_basic`へ`WIDTH: 1`を明示し、1-bit信号の既定8-bit化を解消
+
 ## [0.3.0] - 2026-08-07
 
 ### Changed

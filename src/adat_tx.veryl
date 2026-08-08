@@ -10,14 +10,12 @@ import Types::AdatFamily;
 /// 実機動作は未確認。現時点ではNative testと、RTL内部で接続した`AdatTx`→`AdatRx` loopback testだけを確認している。
 /// 外部ADAT機器との相互接続、光送信回路を含む電気的条件、実機上のタイミングは未検証。
 ///
-/// 送信パイプラインは以下の3段で構成される。
+/// 送信パイプラインは以下の2段で構成される。
 ///
-/// 1. `frame_builder`
-///    - `frame_clk`立ち上がりをトリガに256bit ADATフレームを構築
-/// 2. `bit_serializer`
-///    - 256bitフレームをMSB-firstでシリアル化
+/// 1. `frame_serializer`
+///    - `frame_clk`立ち上がりをトリガに256bit ADATフレームを構築して単一のshift registerへ保持し、MSB-firstでシリアル化
 ///    - `ADAT_FAMILY`に応じて44.1kHz系/48kHz系のビット周期を選択
-/// 3. `nrzi_encoder`
+/// 2. `nrzi_encoder`
 ///    - シリアルビットをNRZIへ変換して`adat`へ出力
 ///
 /// # 公開インターフェースの概念タイミング
@@ -48,12 +46,10 @@ pub module AdatTx #(
     adat       : output  logic                                                                           , /// ADAT NRZI出力
     frame_done : output  logic                                                                           , /// 256bitフレーム送信完了パルス
 ) {
-    var frame_build_pulse: logic     ;
-    var frame_data       : logic<256>;
-    var frame_ready      : logic     ;
-    var serial_bit       : logic     ;
-    var serial_bit_valid : logic     ;
-    var serial_frame_done: logic     ;
+    var frame_build_pulse: logic;
+    var serial_bit       : logic;
+    var serial_bit_valid : logic;
+    var serial_frame_done: logic;
 
     // Gowin合成はprocedural forでinterface配列要素を定数選択できないため、
     // 入力interfaceはgenerate assignでraw配列へ展開する。
@@ -89,25 +85,15 @@ pub module AdatTx #(
         o_negedge: _                ,
     );
 
-    // フレーム構築
-    inst u_frame_builder: FrameBuilder (
-        clk                         ,
-        rst                         ,
-        channels : channels_raw     ,
-        user_bits: user_bits        ,
-        build    : frame_build_pulse,
-        frame    : frame_data       ,
-        ready    : frame_ready      ,
-    );
-
-    // 256bitフレームのシリアル化
-    inst u_serializer: BitSerializer #(
+    // フレーム構築とシリアル化 (256bit単一shift register)
+    inst u_frame_serializer: AdatFrameSerializer #(
         CLK_FREQ  ,
     ) (
         clk                          ,
         rst                          ,
-        frame     : frame_data       ,
-        load      : frame_ready      ,
+        build     : frame_build_pulse,
+        channels  : channels_raw     ,
+        user_bits : user_bits        ,
         family    : ADAT_FAMILY      ,
         serial_bit: serial_bit       ,
         bit_valid : serial_bit_valid ,

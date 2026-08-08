@@ -1,0 +1,543 @@
+import Types::AdatFamily;
+
+/// ADAT TXフレームビルダー兼シリアライザ
+///
+/// `build`パルスで8ch 24bit PCMと`user_bits`から256bit ADATフレームを組み立て、
+/// MSB-first（bit 255 → bit 0）でシリアル出力する。フレームは単一の256bit shift registerに保持するため、
+/// 旧`FrameBuilder`＋`BitSerializer`の二重保持が不要になる。
+/// フレーム構造:
+///   - SYNC: 10個の0 + separator (1)  [255:246] => 0000000000, [245] => 1
+///   - User: 4bit + separator (1)     [244:241] => user_bits, [240] => 1
+///   - CH0-7: 各30bit (6 nibbles)     [239:0]    => encode_24bit(ch0..7)
+///
+/// ビットタイミングはADATビットレート(family × 256)に基づく分数補間で決める。
+/// 48kHz系で約4.07 clk/bit、44.1kHz系で約4.46 clk/bitである。
+/// 旧実装の40bit除算を、同一のedge列を生成する剰余累積へ置き換える。
+/// `build`は`FrameBuilder`の`build`、`frame_done`は`BitSerializer`の`frame_done`と同一cycleで出力する。
+///
+/// `build`が送信中に来た場合は、旧`BitSerializer`の`load`と同様に送信を再スタートする。
+///
+/// ```wavedrom
+/// {
+///   signal: [
+///     { name: 'build', wave: '010...........' },
+///     { name: 'bit_valid', wave: '0....10..10..' },
+///     { name: 'serial_bit', wave: 'x...3.4.5.6..', data: ['b255', 'b254', 'b253', 'b252'] },
+///     { name: 'frame_done', wave: '0............10' }
+///   ],
+///   head: { text: 'Frame build and MSB-first serialization' }
+/// }
+/// ```
+module AdatFrameSerializer #(
+    param CLK_FREQ: u32 = 50_000_000, /// システムクロック周波数 [Hz]
+) (
+    clk       : input  clock             , /// システムクロック (50MHz)
+    rst       : input  reset             , /// リセット
+    build     : input  logic             , /// フレーム構築・送信開始パルス
+    channels  : input  logic     <24> [8], /// 8チャンネルPCM入力
+    user_bits : input  logic     <4>     , /// User nibble入力
+    family    : input  AdatFamily        , /// ADATビットレートファミリー
+    serial_bit: output logic             , /// シリアルビット出力
+    bit_valid : output logic             , /// ビット出力有効ストローブ
+    frame_done: output logic             , /// フレーム送信完了パルス
+) {
+    // 剰余累積で1bit毎に消費するclock数を求める。1bitあたりの消費clockは
+    // clk_freq / bit_rate の丸めであり、その最大値を+2のマージンで上限とする。
+    // 例: 50MHz/48k系 では 50M/12.288M = 4.07 → 上限6。
+    const MAX_CLOCKS_PER_BIT: u32 = CLK_FREQ / 11_289_600 + 2;
+
+    const BIT_RATE_44K1: logic<40> = 40'd11_289_600;
+    const BIT_RATE_48K : logic<40> = 40'd12_288_000;
+    const CLK_FREQ_40  : logic<40> = CLK_FREQ as 40;
+
+    var bit_rate: logic<40>;
+
+    // フレーム保持は単一のshift register。出力MSB→shiftでbit選択muxを不要にする。
+    var shift_reg  : logic<256>;
+    var bit_counter: logic<8>  ;
+    var clk_counter: logic<16> ;
+    // 現在bitの目標clock数と、分数位相の剰余累積値 (bit_rate未満)
+    var gap         : logic<16>;
+    var rem         : logic<40>;
+    var active      : logic    ;
+    var pending     : logic    ;
+    var r_bit       : logic    ;
+    var r_bit_valid : logic    ;
+    var r_frame_done: logic    ;
+
+    var channel_encoded: logic<30>  [8];
+    var build_frame    : logic<256>    ;
+
+    var gap_c     : logic<16>;
+    var rem_next_c: logic<40>;
+    var init_gap_c: logic<16>;
+    var init_rem_c: logic<40>;
+
+    assign serial_bit = r_bit;
+    assign bit_valid  = r_bit_valid;
+    assign frame_done = r_frame_done;
+
+    // ADATファミリーに応じたビットレート選択
+    // 物理ビットレートは2種類のみ:
+    // - F44K1 (0): 11,289,600 bps
+    // - F48K (1): 12,288,000 bps
+    always_comb {
+        if family == AdatFamily::F44K1 {
+            bit_rate = BIT_RATE_44K1;
+        } else {
+            bit_rate = BIT_RATE_48K;
+        }
+    }
+
+    for i in 0..8 :g_encode {
+        assign channel_encoded[i] = {
+            channels[i][23:20], 1'b1, channels[i][19:16], 1'b1, channels[i][15:12], 1'b1, channels[i][11:8], 1'b1,
+            channels[i][7:4], 1'b1, channels[i][3:0], 1'b1
+        };
+    }
+
+    always_comb {
+        build_frame = {
+            10'b0000000000, 1'b1, user_bits, 1'b1, channel_encoded[0], channel_encoded[1], channel_encoded[2],
+            channel_encoded[3], channel_encoded[4], channel_encoded[5], channel_encoded[6], channel_encoded[7],
+        };
+    }
+
+    // 分数位相の剰余累積。sumをbit_rateで繰り返し引き、商(gap)と剰余(rem)を得る。
+    // 繰り返し回数はMAX_CLOCKS_PER_BITで上限を持ち、除算器を使わない。
+    always_comb {
+        var init_sum: logic<40>;
+        var init_tmp: logic<40>;
+        var sum     : logic<40>;
+        var tmp     : logic<40>;
+        init_sum = (bit_rate >> 1) + CLK_FREQ_40;
+        init_tmp = init_sum;
+        sum      = rem + CLK_FREQ_40;
+        tmp      = sum;
+
+        init_gap_c = 0;
+        gap_c      = 0;
+        for _ in 0..MAX_CLOCKS_PER_BIT {
+            if init_tmp >= bit_rate {
+                init_tmp   = init_tmp - bit_rate;
+                init_gap_c = init_gap_c + 1;
+            }
+            if tmp >= bit_rate {
+                tmp   = tmp - bit_rate;
+                gap_c = gap_c + 1;
+            }
+        }
+        init_rem_c = init_tmp;
+        rem_next_c = tmp;
+    }
+
+    always_ff {
+        if_reset {
+            shift_reg    = 256'd0;
+            bit_counter  = 8'd0;
+            clk_counter  = 16'd0;
+            gap          = 16'd0;
+            rem          = 40'd0;
+            active       = 1'b0;
+            pending      = 1'b0;
+            r_bit        = 1'b0;
+            r_bit_valid  = 1'b0;
+            r_frame_done = 1'b0;
+        } else {
+            r_bit_valid  = 1'b0;
+            r_frame_done = 1'b0;
+
+            if build {
+                // フレームをshift registerへ取り込み、次のcycleでタイミングを初期化する。
+                // 旧`FrameBuilder`の1クロックのready遅延と等価で、送信タイミングは旧実装と同一になる。
+                shift_reg = build_frame;
+                pending   = 1'b1;
+            } else if pending {
+                pending     = 1'b0;
+                bit_counter = 8'd0;
+                clk_counter = 16'd0;
+                gap         = init_gap_c;
+                rem         = init_rem_c;
+                active      = 1'b1;
+            } else if active {
+                if clk_counter >= (gap - 16'd1) {
+                    r_bit       = shift_reg[msb];
+                    r_bit_valid = 1'b1;
+                    clk_counter = 16'd0;
+                    shift_reg   = {shift_reg[254:0], 1'b0};
+
+                    if bit_counter >= 8'd255 {
+                        active       = 1'b0;
+                        r_frame_done = 1'b1;
+                    } else {
+                        bit_counter = bit_counter + 8'd1;
+                        gap         = gap_c;
+                        rem         = rem_next_c;
+                    }
+                } else {
+                    clk_counter = clk_counter + 16'd1;
+                }
+            }
+        }
+    }
+}
+
+/// フレーム構築とMSB-firstシリアル化を検証
+/// build後、全256bitがフレームと同一の順序で出力され、最後にframe_doneが出ることを確認する
+#[test(test_adat_frame_serializer)]
+module test_adat_frame_serializer {
+    inst clk: $tb::clock_gen;
+    inst rst: $tb::reset_gen ( clk );
+
+    var build     : logic              ;
+    var channels  : logic     <24>  [8];
+    var user_bits : logic     <4>      ;
+    var family    : AdatFamily         ;
+    var serial_bit: logic              ;
+    var bit_valid : logic              ;
+    var frame_done: logic              ;
+    var frame     : logic     <256>    ;
+
+    inst dut: AdatFrameSerializer #(
+        CLK_FREQ: 50_000_000,
+    ) (
+        clk         ,
+        rst         ,
+        build       ,
+        channels    ,
+        user_bits   ,
+        family      ,
+        serial_bit  ,
+        bit_valid   ,
+        frame_done  ,
+    );
+
+    // 期待フレームを組み立てる
+    always_comb {
+        frame = {
+            10'b0000000000, 1'b1, user_bits, 1'b1,
+            {
+                channels[0][23:20], 1'b1, channels[0][19:16], 1'b1, channels[0][15:12], 1'b1, channels[0][11:8], 1'b1,
+                channels[0][7:4], 1'b1, channels[0][3:0], 1'b1
+            },
+            {
+                channels[1][23:20], 1'b1, channels[1][19:16], 1'b1, channels[1][15:12], 1'b1, channels[1][11:8], 1'b1,
+                channels[1][7:4], 1'b1, channels[1][3:0], 1'b1
+            },
+            {
+                channels[2][23:20], 1'b1, channels[2][19:16], 1'b1, channels[2][15:12], 1'b1, channels[2][11:8], 1'b1,
+                channels[2][7:4], 1'b1, channels[2][3:0], 1'b1
+            },
+            {
+                channels[3][23:20], 1'b1, channels[3][19:16], 1'b1, channels[3][15:12], 1'b1, channels[3][11:8], 1'b1,
+                channels[3][7:4], 1'b1, channels[3][3:0], 1'b1
+            },
+            {
+                channels[4][23:20], 1'b1, channels[4][19:16], 1'b1, channels[4][15:12], 1'b1, channels[4][11:8], 1'b1,
+                channels[4][7:4], 1'b1, channels[4][3:0], 1'b1
+            },
+            {
+                channels[5][23:20], 1'b1, channels[5][19:16], 1'b1, channels[5][15:12], 1'b1, channels[5][11:8], 1'b1,
+                channels[5][7:4], 1'b1, channels[5][3:0], 1'b1
+            },
+            {
+                channels[6][23:20], 1'b1, channels[6][19:16], 1'b1, channels[6][15:12], 1'b1, channels[6][11:8], 1'b1,
+                channels[6][7:4], 1'b1, channels[6][3:0], 1'b1
+            },
+            {
+                channels[7][23:20], 1'b1, channels[7][19:16], 1'b1, channels[7][15:12], 1'b1, channels[7][11:8], 1'b1,
+                channels[7][7:4], 1'b1, channels[7][3:0], 1'b1
+            },
+        };
+    }
+
+    var bit_count: logic<9>  ;
+    var frame_buf: logic<256>;
+    var done_seen: logic     ;
+
+    always_ff (clk, rst) {
+        if_reset {
+            bit_count = 0;
+            frame_buf = 0;
+            done_seen = 0;
+        } else {
+            if bit_valid {
+                frame_buf = {frame_buf[254:0], serial_bit};
+                bit_count = bit_count + 1;
+            }
+            if frame_done {
+                done_seen = 1;
+            }
+        }
+    }
+
+    initial {
+        channels[0] = 24'h123456;
+        channels[1] = 24'h789ABC;
+        channels[2] = 24'hDEF012;
+        channels[3] = 24'h345678;
+        channels[4] = 24'h9ABCDE;
+        channels[5] = 24'hF01234;
+        channels[6] = 24'h567890;
+        channels[7] = 24'hABCDEF;
+        user_bits   = 4'hA;
+        build       = 1'b0;
+        family      = AdatFamily::F48K;
+        rst.assert();
+        clk.next(2);
+
+        build = 1'b1;
+        clk.next(1);
+        build = 1'b0;
+        // 256bit / 12.288Mbps at 50MHz is about 1042 clocks
+        clk.next(1200);
+
+        $assert(bit_count == 9'd256, "frame serializer bit count mismatch");
+        $assert(done_seen == 1'b1, "frame serializer frame_done was not observed");
+        $assert(frame_buf == frame, "serialized frame must match the built frame");
+        $finish();
+    }
+}
+
+/// 旧`FrameBuilder`の参照実装 (equivalence test用)
+module RefFrameBuilder (
+    clk      : input  clock         ,
+    rst      : input  reset         ,
+    channels : input  logic<24>  [8],
+    user_bits: input  logic<4>      ,
+    build    : input  logic         ,
+    frame    : output logic<256>    ,
+    ready    : output logic         ,
+) {
+    var frame_reg  : logic<256>    ;
+    var r_ready    : logic         ;
+    var build_frame: logic<256>    ;
+    var channel_ref: logic<30>  [8];
+
+    assign frame = frame_reg;
+    assign ready = r_ready;
+
+    for i in 0..8 :g_encode {
+        assign channel_ref[i] = {
+            channels[i][23:20], 1'b1, channels[i][19:16], 1'b1, channels[i][15:12], 1'b1, channels[i][11:8], 1'b1,
+            channels[i][7:4], 1'b1, channels[i][3:0], 1'b1
+        };
+    }
+
+    always_comb {
+        build_frame = {
+            10'b0000000000, 1'b1, user_bits, 1'b1, channel_ref[0], channel_ref[1], channel_ref[2], channel_ref[3],
+            channel_ref[4], channel_ref[5], channel_ref[6], channel_ref[7],
+        };
+    }
+
+    always_ff {
+        if_reset {
+            frame_reg = 256'd0;
+            r_ready   = 1'b0;
+        } else if build {
+            frame_reg = build_frame;
+            r_ready   = 1'b1;
+        } else {
+            r_ready = 1'b0;
+        }
+    }
+}
+
+/// 旧`BitSerializer`の参照実装 (equivalence test用)
+module RefBitSerializer #(
+    param CLK_FREQ: u32 = 50_000_000,
+) (
+    clk       : input  clock          ,
+    rst       : input  reset          ,
+    frame     : input  logic     <256>,
+    load      : input  logic          ,
+    family    : input  AdatFamily     ,
+    serial_bit: output logic          ,
+    bit_valid : output logic          ,
+    frame_done: output logic          ,
+) {
+    var bit_rate         : logic<40> ;
+    var clk_freq         : logic<40> ;
+    var frame_reg        : logic<256>;
+    var bit_counter      : logic<8>  ;
+    var clk_counter      : logic<16> ;
+    var bit_clocks_target: logic<16> ;
+    var phase_accum      : logic<40> ;
+    var edge_clocks      : logic<16> ;
+    var active           : logic     ;
+    var r_bit            : logic     ;
+    var r_bit_valid      : logic     ;
+    var r_frame_done     : logic     ;
+
+    assign serial_bit = r_bit;
+    assign bit_valid  = r_bit_valid;
+    assign frame_done = r_frame_done;
+
+    always_comb {
+        if family == AdatFamily::F44K1 {
+            bit_rate = 40'd11_289_600;
+        } else {
+            bit_rate = 40'd12_288_000;
+        }
+        clk_freq = CLK_FREQ;
+    }
+
+    always_ff {
+        if_reset {
+            frame_reg         = 256'd0;
+            bit_counter       = 8'd0;
+            clk_counter       = 16'd0;
+            bit_clocks_target = 16'd1;
+            phase_accum       = 40'd0;
+            edge_clocks       = 16'd0;
+            active            = 1'b0;
+            r_bit             = 1'b0;
+            r_bit_valid       = 1'b0;
+            r_frame_done      = 1'b0;
+        } else {
+            r_bit_valid  = 1'b0;
+            r_frame_done = 1'b0;
+
+            if load {
+                let first_phase: logic<40> = (bit_rate >> 1) + clk_freq;
+                let first_edge : logic<16> = first_phase / bit_rate;
+
+                frame_reg         = frame;
+                bit_counter       = 8'd0;
+                clk_counter       = 16'd0;
+                bit_clocks_target = first_edge;
+                phase_accum       = first_phase;
+                edge_clocks       = first_edge;
+                active            = 1'b1;
+            } else if active {
+                if clk_counter >= (bit_clocks_target - 16'd1) {
+                    r_bit       = frame_reg[255 - bit_counter];
+                    r_bit_valid = 1'b1;
+                    clk_counter = 16'd0;
+
+                    if bit_counter >= 8'd255 {
+                        active       = 1'b0;
+                        r_frame_done = 1'b1;
+                    } else {
+                        let next_phase: logic<40> = phase_accum + clk_freq;
+                        let next_edge : logic<16> = next_phase / bit_rate;
+
+                        bit_counter       = bit_counter + 8'd1;
+                        phase_accum       = next_phase;
+                        bit_clocks_target = next_edge - edge_clocks;
+                        edge_clocks       = next_edge;
+                    }
+                } else {
+                    clk_counter = clk_counter + 16'd1;
+                }
+            }
+        }
+    }
+}
+
+/// 新`AdatFrameSerializer`と旧`FrameBuilder`＋`BitSerializer`のcycle単位等価性を検証
+/// F44K1/F48Kの両familyで、serial_bit・bit_valid・frame_doneを全clock比較する
+#[test(test_adat_frame_serializer_equiv_old)]
+module test_adat_frame_serializer_equiv_old {
+    inst clk: $tb::clock_gen;
+    inst rst: $tb::reset_gen ( clk );
+
+    var build    : logic             ;
+    var channels : logic     <24> [8];
+    var user_bits: logic     <4>     ;
+    var family   : AdatFamily        ;
+
+    var new_serial_bit: logic;
+    var new_bit_valid : logic;
+    var new_frame_done: logic;
+
+    var ref_frame     : logic<256>;
+    var ref_ready     : logic     ;
+    var ref_serial_bit: logic     ;
+    var ref_bit_valid : logic     ;
+    var ref_frame_done: logic     ;
+
+    inst dut: AdatFrameSerializer #(
+        CLK_FREQ: 50_000_000,
+    ) (
+        clk                       ,
+        rst                       ,
+        build                     ,
+        channels                  ,
+        user_bits                 ,
+        family                    ,
+        serial_bit: new_serial_bit,
+        bit_valid : new_bit_valid ,
+        frame_done: new_frame_done,
+    );
+
+    inst ref_builder: RefFrameBuilder (
+        clk                 ,
+        rst                 ,
+        channels            ,
+        user_bits           ,
+        build               ,
+        frame    : ref_frame,
+        ready    : ref_ready,
+    );
+
+    inst ref_serializer: RefBitSerializer #(
+        CLK_FREQ: 50_000_000,
+    ) (
+        clk                       ,
+        rst                       ,
+        frame     : ref_frame     ,
+        load      : ref_ready     ,
+        family                    ,
+        serial_bit: ref_serial_bit,
+        bit_valid : ref_bit_valid ,
+        frame_done: ref_frame_done,
+    );
+
+    var mismatches: logic<16>;
+
+    always_ff (clk, rst) {
+        if_reset {
+            mismatches = 0;
+        } else {
+            if new_serial_bit != ref_serial_bit || new_bit_valid != ref_bit_valid || new_frame_done != ref_frame_done {
+                mismatches = mismatches + 1;
+            }
+        }
+    }
+
+    initial {
+        channels[0] = 24'h123456;
+        channels[1] = 24'h789ABC;
+        channels[2] = 24'hDEF012;
+        channels[3] = 24'h345678;
+        channels[4] = 24'h9ABCDE;
+        channels[5] = 24'hF01234;
+        channels[6] = 24'h567890;
+        channels[7] = 24'hABCDEF;
+        user_bits   = 4'hA;
+        build       = 1'b0;
+        family      = AdatFamily::F48K;
+        rst.assert();
+        clk.next(2);
+
+        build = 1'b1;
+        clk.next(1);
+        build = 1'b0;
+        clk.next(1200);
+
+        $assert(mismatches == 0, "F48K serializer must be cycle-exact with the old implementation");
+
+        // F44K1で同様に比較
+        family = AdatFamily::F44K1;
+        clk.next(8);
+        build = 1'b1;
+        clk.next(1);
+        build = 1'b0;
+        clk.next(1200);
+
+        $assert(mismatches == 0, "F44K1 serializer must be cycle-exact with the old implementation");
+        $finish();
+    }
+}
