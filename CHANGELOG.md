@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- `gndless_fixedpoint` の package をトップレベル import し、`FixedPointValue` / `Q1_23` の完全修飾パスを短縮（Veryl 0.20.3 の namespace import 機能を使用）
+
 ## [0.4.0] - 2026-08-08
 
 ### Fixed
