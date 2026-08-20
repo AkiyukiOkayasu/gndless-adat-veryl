@@ -1,3 +1,6 @@
+import gndless_fixedpoint::FixedPointValue;
+import gndless_fixedpoint::Q1_23;
+
 import Types::AdatFamily;
 
 /// ADATレシーバ トップモジュール
@@ -23,7 +26,7 @@ import Types::AdatFamily;
 ///
 /// # S/MUX時のチャンネルマッピング（別moduleまたは利用側で実装）
 /// 本モジュールは `channels[0..7]` を物理スロットとして出力し、S/MUXの論理チャンネル再構成は行わない。
-/// `channels`は`gndless_fixedpoint::FixedPointValue::<gndless_fixedpoint::Q1_23>`境界で、raw値は`channels[i].raw`から得る。
+/// `channels`は`FixedPointValue::<Q1_23>`境界で、raw値は`channels[i].raw`から得る。
 /// S/MUX2受信では、出力を `Smux2Unpacker`へ直接接続して4chの高速sample列へ戻す。
 /// `Smux2Packer`は送信側で4ch sample列を8物理スロットへ並べるmoduleであり、受信後の再構成には使用しない。
 ///
@@ -76,7 +79,7 @@ import Types::AdatFamily;
 ///
 /// # Examples
 /// ```veryl
-/// inst audio: gndless_fixedpoint::FixedPointValue::<gndless_fixedpoint::Q1_23> [8];
+/// inst audio: FixedPointValue::<Q1_23> [8];
 /// inst adat: AdatRx (
 ///     clk        : sys_clk_50mhz,
 ///     rst        : reset,
@@ -107,9 +110,9 @@ pub module AdatRx (
     smux_active: output bbool,
     /// 8チャンネルPCMデータ出力（ADAT物理スロット）。
     /// 注意: S/MUX有効時の論理チャンネル再構成は利用側の実装が必要
-    channels   : modport gndless_fixedpoint::FixedPointValue::<gndless_fixedpoint::Q1_23>::output_port [8],
-    frame_valid: output  logic                                                                            , /// 完全フレームcommitパルス
-    locked     : output  bbool                                                                            , /// 同期ロック状態
+    channels   : modport FixedPointValue::<Q1_23>::output_port [8],
+    frame_valid: output  logic                                    , /// 完全フレームcommitパルス
+    locked     : output  bbool                                    , /// 同期ロック状態
 ) {
     // 内部信号
     var adat_edge  : logic    ;
@@ -220,19 +223,19 @@ module test_adat_loopback {
     inst rst: $tb::reset_gen ( clk );
 
     var frame_clk_tx: logic;
-    inst channels_tx: gndless_fixedpoint::FixedPointValue::<gndless_fixedpoint::Q1_23> [8];
+    inst channels_tx: FixedPointValue::<Q1_23> [8];
     var smux_active_tx: bbool;
     var adat_loopback : logic;
     var frame_done_tx : logic;
 
     var frame_clk_rx  : logic;
     var smux_active_rx: bbool;
-    inst channels_rx: gndless_fixedpoint::FixedPointValue::<gndless_fixedpoint::Q1_23> [8];
+    inst channels_rx: FixedPointValue::<Q1_23> [8];
     var frame_valid_rx: logic;
     var locked_rx     : bbool;
 
     var unpacked_valid: logic;
-    inst unpacker_samples: gndless_fixedpoint::FixedPointValue::<gndless_fixedpoint::Q1_23> [4];
+    inst unpacker_samples: FixedPointValue::<Q1_23> [4];
     var first_set_seen : bbool;
     var second_set_seen: bbool;
 

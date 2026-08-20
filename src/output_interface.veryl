@@ -1,3 +1,6 @@
+import gndless_fixedpoint::FixedPointValue;
+import gndless_fixedpoint::Q1_23;
+
 /// 完全ADATフレームの出力インターフェース
 ///
 /// 受信途中のチャンネルをworking bufferへ隔離し、channel 0から7まで
@@ -21,19 +24,19 @@
 /// 完全フレームの周期安定を確認したときに`locked`をアサートする。
 /// 周期変化、S/MUX2 flag変化、frame欠落では解除し、再qualificationを行う。
 module OutputInterface (
-    clk        : input   clock                                                                                , /// システムクロック
-    rst        : input   reset                                                                                , /// リセット
-    frame_time : input   logic                                                                        <12>    , /// フレーム時間
-    data       : input   logic                                                                        <24>    , /// PCMデータ入力
-    channel    : input   logic                                                                        <3>     , /// チャンネル番号
-    data_valid : input   logic                                                                                , /// データ有効
-    sync       : input   logic                                                                                , /// 同期マスク
-    user_bits  : input   logic                                                                        <4>     , /// ユーザービット入力
-    smux_active: output  bbool                                                                                , /// 検出されたS/MUX有効状態 (1: 有効, 0: 無効)
-    frame_clk  : output  logic                                                                                , /// ADATフレーム周期のクロック出力（サンプルクロックではない）
-    channels   : modport gndless_fixedpoint::FixedPointValue::<gndless_fixedpoint::Q1_23>::output_port     [8], /// 8チャンネルPCMデータ出力
-    frame_valid: output  logic                                                                                , /// 完全フレームcommitパルス
-    locked     : output  bbool                                                                                , /// 同期ロック状態
+    clk        : input   clock                                        , /// システムクロック
+    rst        : input   reset                                        , /// リセット
+    frame_time : input   logic                                <12>    , /// フレーム時間
+    data       : input   logic                                <24>    , /// PCMデータ入力
+    channel    : input   logic                                <3>     , /// チャンネル番号
+    data_valid : input   logic                                        , /// データ有効
+    sync       : input   logic                                        , /// 同期マスク
+    user_bits  : input   logic                                <4>     , /// ユーザービット入力
+    smux_active: output  bbool                                        , /// 検出されたS/MUX有効状態 (1: 有効, 0: 無効)
+    frame_clk  : output  logic                                        , /// ADATフレーム周期のクロック出力（サンプルクロックではない）
+    channels   : modport FixedPointValue::<Q1_23>::output_port     [8], /// 8チャンネルPCMデータ出力
+    frame_valid: output  logic                                        , /// 完全フレームcommitパルス
+    locked     : output  bbool                                        , /// 同期ロック状態
 ) {
     // ワードクロックカウンタ
     var word_clk_cnt: logic<12>;
@@ -188,7 +191,7 @@ module test_adat_output_interface {
     var user_bits  : logic<4> ;
     var smux_active: bbool    ;
     var frame_clk  : logic    ;
-    inst channels: gndless_fixedpoint::FixedPointValue::<gndless_fixedpoint::Q1_23> [8];
+    inst channels: FixedPointValue::<Q1_23> [8];
     var frame_valid    : logic;
     var locked         : bbool;
     var raw_seen       : logic;

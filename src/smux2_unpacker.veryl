@@ -1,9 +1,12 @@
+import gndless_fixedpoint::FixedPointValue;
+import gndless_fixedpoint::Q1_23;
+
 /// S/MUX2の8物理スロットを4chの高速サンプルへ戻す
 ///
 /// 1つのADATフレームを受けたサイクルで先行サンプルを出力し、次のシステムクロックで後続サンプルを出力する。
 /// したがって、`frame_valid` 1回に対して `sample_valid` は2クロック連続でHighになる。
 /// `frame_valid`は、後続サンプルの出力が終わるまで再度アサートしないこと。
-/// `channels`と`samples`は`gndless_fixedpoint::FixedPointValue::<gndless_fixedpoint::Q1_23>`境界であり、
+/// `channels`と`samples`は`FixedPointValue::<Q1_23>`境界であり、
 /// `AdatRx`の`channels`出力へ直接接続できる。
 ///
 /// ```wavedrom
@@ -18,16 +21,16 @@
 /// }
 /// ```
 pub module Smux2Unpacker (
-    clk         : input   clock                                                                            ,
-    rst         : input   reset                                                                            ,
-    channels    : modport gndless_fixedpoint::FixedPointValue::<gndless_fixedpoint::Q1_23>::input_port  [8],
-    frame_valid : input   logic                                                                            ,
-    samples     : modport gndless_fixedpoint::FixedPointValue::<gndless_fixedpoint::Q1_23>::output_port [4],
-    sample_valid: output  logic                                                                            ,
+    clk         : input   clock                                    ,
+    rst         : input   reset                                    ,
+    channels    : modport FixedPointValue::<Q1_23>::input_port  [8],
+    frame_valid : input   logic                                    ,
+    samples     : modport FixedPointValue::<Q1_23>::output_port [4],
+    sample_valid: output  logic                                    ,
 ) {
-    var second_samples: gndless_fixedpoint::Q1_23::Raw [4];
-    var samples_reg   : gndless_fixedpoint::Q1_23::Raw [4];
-    var emit_second   : logic                             ;
+    var second_samples: Q1_23::Raw [4];
+    var samples_reg   : Q1_23::Raw [4];
+    var emit_second   : logic         ;
 
     always_ff {
         if_reset {
@@ -80,10 +83,10 @@ module test_smux2_pack_unpack {
     inst rst: $tb::reset_gen ( clk );
 
     var input_valid: logic;
-    inst input_samples  : gndless_fixedpoint::FixedPointValue::<gndless_fixedpoint::Q1_23> [4];
-    inst packed_channels: gndless_fixedpoint::FixedPointValue::<gndless_fixedpoint::Q1_23> [8];
+    inst input_samples  : FixedPointValue::<Q1_23> [4];
+    inst packed_channels: FixedPointValue::<Q1_23> [8];
     var packed_valid: logic;
-    inst unpacker_samples: gndless_fixedpoint::FixedPointValue::<gndless_fixedpoint::Q1_23> [4];
+    inst unpacker_samples: FixedPointValue::<Q1_23> [4];
     var unpacked_valid: logic;
 
     inst packer: Smux2Packer (

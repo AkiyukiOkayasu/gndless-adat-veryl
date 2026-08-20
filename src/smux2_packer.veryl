@@ -1,8 +1,11 @@
+import gndless_fixedpoint::FixedPointValue;
+import gndless_fixedpoint::Q1_23;
+
 /// 4chの高速サンプルをS/MUX2の8物理スロットへ並べ替える
 ///
 /// `sample_valid`を96kHz側のサンプル受理パルス、`frame_valid`を48kHz側のADATフレーム受理パルスとして使う。
 /// 2つの入力サンプルを1フレームにまとめ、各チャンネルの先行サンプルを偶数スロット、後続サンプルを奇数スロットへ配置する。
-/// `samples`と`channels`は`gndless_fixedpoint::FixedPointValue::<gndless_fixedpoint::Q1_23>`境界であり、
+/// `samples`と`channels`は`FixedPointValue::<Q1_23>`境界であり、
 /// `AdatTx`の`channels`入力へ直接接続できる。
 ///
 /// 次図では、`A`と`B`が時間順に連続する4ch sample setを表す。
@@ -20,16 +23,16 @@
 /// }
 /// ```
 pub module Smux2Packer (
-    clk         : input   clock                                                                            ,
-    rst         : input   reset                                                                            ,
-    sample_valid: input   logic                                                                            , /// 高速サンプル受理パルス
-    samples     : modport gndless_fixedpoint::FixedPointValue::<gndless_fixedpoint::Q1_23>::input_port  [4],
-    channels    : modport gndless_fixedpoint::FixedPointValue::<gndless_fixedpoint::Q1_23>::output_port [8],
-    frame_valid : output  logic                                                                            , /// フレーム更新パルス
+    clk         : input   clock                                    ,
+    rst         : input   reset                                    ,
+    sample_valid: input   logic                                    , /// 高速サンプル受理パルス
+    samples     : modport FixedPointValue::<Q1_23>::input_port  [4],
+    channels    : modport FixedPointValue::<Q1_23>::output_port [8],
+    frame_valid : output  logic                                    , /// フレーム更新パルス
 ) {
-    var first_samples: gndless_fixedpoint::Q1_23::Raw [4];
-    var channels_reg : gndless_fixedpoint::Q1_23::Raw [8];
-    var have_first   : logic                             ;
+    var first_samples: Q1_23::Raw [4];
+    var channels_reg : Q1_23::Raw [8];
+    var have_first   : logic         ;
 
     always_ff {
         if_reset {

@@ -1,3 +1,6 @@
+import gndless_fixedpoint::FixedPointValue;
+import gndless_fixedpoint::Q1_23;
+
 import Types::AdatFamily;
 
 /// AdatTx→AdatRxを同一クロックで接続するpackage内E2E経路。
@@ -7,23 +10,23 @@ import Types::AdatFamily;
 module AdatTxRxPath #(
     param ADAT_FAMILY: AdatFamily = AdatFamily::F48K,
 ) (
-    clk        : input   clock                                                                                ,
-    rst        : input   reset                                                                                ,
-    run        : input   bbool                                                                                ,
-    smux_active: input   bbool                                                                                ,
-    tx_channels: input   logic                                                                        <24> [8],
-    adat       : output  logic                                                                                ,
-    rx_smux    : output  bbool                                                                                ,
-    rx_channels: modport gndless_fixedpoint::FixedPointValue::<gndless_fixedpoint::Q1_23>::output_port     [8],
-    rx_valid   : output  logic                                                                                ,
-    rx_locked  : output  bbool                                                                                ,
+    clk        : input   clock                                        ,
+    rst        : input   reset                                        ,
+    run        : input   bbool                                        ,
+    smux_active: input   bbool                                        ,
+    tx_channels: input   logic                                <24> [8],
+    adat       : output  logic                                        ,
+    rx_smux    : output  bbool                                        ,
+    rx_channels: modport FixedPointValue::<Q1_23>::output_port     [8],
+    rx_valid   : output  logic                                        ,
+    rx_locked  : output  bbool                                        ,
 ) {
     var frame_clk_tx : logic;
     var frame_done   : logic;
     var start_pending: bbool;
 
     // raw入力portをQ1.23 interfaceへ載せてAdatTxへ接続する
-    inst tx_channels_if: gndless_fixedpoint::FixedPointValue::<gndless_fixedpoint::Q1_23> [8];
+    inst tx_channels_if: FixedPointValue::<Q1_23> [8];
     for i in 0..8 :g_tx {
         assign tx_channels_if[i].raw = tx_channels[i];
     }
@@ -72,16 +75,16 @@ module AdatTxRxPath #(
 
 /// 48kHz系と44.1kHz系のAdatTxを切り替えるpackage内E2E経路。
 module AdatTxRxRatePath (
-    clk        : input   clock                                                                                ,
-    rst        : input   reset                                                                                ,
-    run        : input   bbool                                                                                ,
-    use_44k1   : input   bbool                                                                                ,
-    tx_channels: input   logic                                                                        <24> [8],
-    adat       : output  logic                                                                                ,
-    rx_smux    : output  bbool                                                                                ,
-    rx_channels: modport gndless_fixedpoint::FixedPointValue::<gndless_fixedpoint::Q1_23>::output_port     [8],
-    rx_valid   : output  logic                                                                                ,
-    rx_locked  : output  bbool                                                                                ,
+    clk        : input   clock                                        ,
+    rst        : input   reset                                        ,
+    run        : input   bbool                                        ,
+    use_44k1   : input   bbool                                        ,
+    tx_channels: input   logic                                <24> [8],
+    adat       : output  logic                                        ,
+    rx_smux    : output  bbool                                        ,
+    rx_channels: modport FixedPointValue::<Q1_23>::output_port     [8],
+    rx_valid   : output  logic                                        ,
+    rx_locked  : output  bbool                                        ,
 ) {
     var frame_clk_48 : logic;
     var frame_clk_44 : logic;
@@ -93,7 +96,7 @@ module AdatTxRxRatePath (
     var adat_44      : logic;
 
     // raw入力portをQ1.23 interfaceへ載せてAdatTxへ接続する
-    inst tx_channels_if: gndless_fixedpoint::FixedPointValue::<gndless_fixedpoint::Q1_23> [8];
+    inst tx_channels_if: FixedPointValue::<Q1_23> [8];
     for i in 0..8 :g_tx {
         assign tx_channels_if[i].raw = tx_channels[i];
     }
@@ -182,7 +185,7 @@ module test_adat_tx_rx_rate_transition {
     var tx_channels: logic<24> [8];
     var adat       : logic        ;
     var rx_smux    : bbool        ;
-    inst rx_channels: gndless_fixedpoint::FixedPointValue::<gndless_fixedpoint::Q1_23> [8];
+    inst rx_channels: FixedPointValue::<Q1_23> [8];
     var rx_valid    : logic   ;
     var rx_locked   : bbool   ;
     var phase       : logic<2>;
@@ -308,7 +311,7 @@ module test_adat_tx_rx_smux_recovery {
     var tx_channels: logic<24> [8];
     var adat       : logic        ;
     var rx_smux    : bbool        ;
-    inst rx_channels: gndless_fixedpoint::FixedPointValue::<gndless_fixedpoint::Q1_23> [8];
+    inst rx_channels: FixedPointValue::<Q1_23> [8];
     var rx_valid      : logic;
     var rx_locked     : bbool;
     var locked_seen   : bbool;
