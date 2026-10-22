@@ -3,12 +3,10 @@ import gndless_fixedpoint::Q1_23;
 
 /// 完全ADATフレームの出力インターフェース
 ///
-/// 受信途中のチャンネルをworking bufferへ隔離し、channel 0から7まで
-/// 順序どおりそろった場合だけ8chを一括commitする。S/MUX flagはUserBit2
-/// (送信順で2番目のuser bit) の値をS/MUX2として扱う。
-/// S/MUX2 (88.2/96kHz) のときだけUserBit2が1になる。S/MUX4 (176.4/192kHz)
-/// はuser bitが全0のため検出できず (RME ADI-8 DSマニュアル "No S/MUX4 Flag")、
-/// ユーザー側のクロック/レート設定が必要である。
+/// 受信途中のチャンネルをworking bufferへ隔離し、channel 0から7まで順序どおりそろった場合だけ8chを一括commitする。
+/// S/MUX flagはUserBit2 (送信順で2番目のuser bit) の値をS/MUX2として扱う。
+/// S/MUX2 (88.2/96kHz) のときだけUserBit2が1になる。
+/// S/MUX4 (176.4/192kHz) はuser bitが全0のため検出できず (RME ADI-8 DSマニュアル "No S/MUX4 Flag")、ユーザー側のクロック/レート設定が必要である。
 ///
 /// # フレームクロック
 /// ADATフレーム周期のクロック（サンプルクロックではない）。
@@ -16,9 +14,8 @@ import gndless_fixedpoint::Q1_23;
 ///
 /// # frame_valid
 /// channel 0から7まで完全な順序で受信・commitした完全frameを1サイクルで通知する。
-/// `locked`とは独立したraw commit pulseであり、qualification中やrate/mode
-/// transitionのframeでは`frame_valid=1, locked=0`になり得る。下流は
-/// `frame_valid && locked`を受理条件にすること。
+/// `locked`とは独立したraw commit pulseであり、qualification中やrate/mode transitionのframeでは`frame_valid=1, locked=0`になり得る。
+/// 下流は`frame_valid && locked`を受理条件にすること。
 ///
 /// # locked
 /// 完全フレームの周期安定を確認したときに`locked`をアサートする。
@@ -57,8 +54,8 @@ module OutputInterface (
     assign smux_active = committed_smux;
 
     assign frame_clk = word_clk;
-    // 完全frameのraw commitを1クロック遅延して公開する。lockは独立した
-    // qualification状態であり、下流がframe_valid && lockedで受理する。
+    // 完全frameのraw commitを1クロック遅延して公開する。
+    // lockは独立したqualification状態であり、下流がframe_valid && lockedで受理する。
     assign frame_valid = commit_pending;
     assign locked      = lock_reg;
 
@@ -86,8 +83,7 @@ module OutputInterface (
         locked     : lock_reg      ,
     );
 
-    // qualifierはvalid_outを1クロック遅れて観測するため、同じcommitを
-    // raw frame_validとして公開する。
+    // qualifierはvalid_outを1クロック遅れて観測するため、同じcommitをraw frame_validとして公開する。
     always_ff {
         if_reset {
             commit_pending = 1'b0;
@@ -277,8 +273,8 @@ module test_adat_output_interface {
         $assert(channels[0].raw == 24'h100000, "channel 0 data mismatch");
         $assert(channels[7].raw == 24'h7FFFFF, "channel 7 data mismatch");
 
-        // 32個の安定interval後にqualifierがlockする。raw frame_validは
-        // qualification中も各atomic commitで発生する。
+        // 32個の安定interval後にqualifierがlockする。
+        // raw frame_validはqualification中も各atomic commitで発生する。
         for _i in 0..34 {
             push_frame();
         }

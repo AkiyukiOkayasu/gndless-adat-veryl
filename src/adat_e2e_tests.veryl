@@ -5,8 +5,7 @@ import Types::AdatFamily;
 
 /// AdatTx→AdatRxを同一クロックで接続するpackage内E2E経路。
 ///
-/// `run`をLowにすると現在フレームの送信完了後にストリームを停止し、
-/// 再開時は新しいframe pulseから送信を再開する。
+/// `run`をLowにすると現在フレームの送信完了後にストリームを停止し、再開時は新しいframe pulseから送信を再開する。
 module AdatTxRxPath #(
     param ADAT_FAMILY: AdatFamily = AdatFamily::F48K,
 ) (

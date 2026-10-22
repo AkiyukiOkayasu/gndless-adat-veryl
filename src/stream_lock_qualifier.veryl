@@ -1,18 +1,12 @@
 /// 完全ADATフレームの周期とS/MUX2状態からストリームロックを判定する。
 ///
-/// `frame_valid`は、受信側がチャンネル0から7までを順序どおり
-/// commitした1クロックパルスでなければならない。最初の完全フレームは
-/// timestampの基準にのみ使い、その後32個の安定したframe intervalを
-/// 観測してから`locked`をアサートする。周期の許容幅は推定周期の1/64
-/// （ただしtimestampの量子化誤差を吸収するため最低1システムクロック）
-/// であり、量子化ジッターと緩やかなクロックドリフトを
-/// 吸収しながら、44.1kHzと48kHzの切替やframe欠落をロック解除として扱う。
+/// `frame_valid`は、受信側がチャンネル0から7までを順序どおりcommitした1クロックパルスでなければならない。
+/// 最初の完全フレームはtimestampの基準にのみ使い、その後32個の安定したframe intervalを観測してから`locked`をアサートする。
+/// 周期の許容幅は推定周期の1/64（ただしtimestampの量子化誤差を吸収するため最低1システムクロック）であり、量子化ジッターと緩やかなクロックドリフトを吸収しながら、44.1kHzと48kHzの切替やframe欠落をロック解除として扱う。
 ///
 /// smux_activeはUserBit2 (送信順で2番目のuser bit) の状態をそのままS/MUX2として扱う。
-/// UserBit2はS/MUX2 (88.2/96kHz) のときだけ1になり、S/MUX4 (176.4/192kHz) では
-/// user bitが全0のため検出できない (RME ADI-8 DSマニュアル "No S/MUX4 Flag")。
-/// S/MUX4の受信にはユーザー側のクロック/レート設定が必要で、ADATストリームの
-/// タイミングからはS/MUX2と判別できない。
+/// UserBit2はS/MUX2 (88.2/96kHz) のときだけ1になり、S/MUX4 (176.4/192kHz) ではuser bitが全0のため検出できない (RME ADI-8 DSマニュアル "No S/MUX4 Flag")。
+/// S/MUX4の受信にはユーザー側のクロック/レート設定が必要で、ADATストリームのタイミングからはS/MUX2と判別できない。
 module StreamLockQualifier (
     clk        : input  clock    , /// システムクロック
     rst        : input  reset    , /// リセット
@@ -41,8 +35,8 @@ module StreamLockQualifier (
     assign locked     = locked_reg;
     assign elapsed    = timestamp - previous_timestamp;
     assign elapsed_q8 = {elapsed, 8'd0};
-    // 1/64周期の許容幅。短い合成テスト周期でも1clkの量子化誤差を
-    // 許容できるよう、Q8で最低1clk (=256)を確保する。
+    // 1/64周期の許容幅。
+    // 短い合成テスト周期でも1clkの量子化誤差を許容できるよう、Q8で最低1clk (=256)を確保する。
     assign tolerance_q8   = if (reference_q8 >> 6) >: 24'd256 ? reference_q8 >> 6 : 24'd256;
     assign lower_bound_q8 = if reference_q8 >: tolerance_q8 ? reference_q8 - tolerance_q8 : 24'd0;
     assign upper_bound_q8 = reference_q8 + tolerance_q8;
@@ -70,8 +64,7 @@ module StreamLockQualifier (
                 locked_reg         = 1'b0;
             } else if !have_period {
                 // 最初のintervalを基準周期にすることで44.1/48kHzを共通化する。
-                // ただしseed直後にS/MUXが変わった場合は、そのintervalを
-                // 異なるストリームの混在として捨て、現在frameを新seedにする。
+                // ただしseed直後にS/MUXが変わった場合は、そのintervalを異なるストリームの混在として捨て、現在frameを新seedにする。
                 if smux_active != previous_smux {
                     previous_timestamp = timestamp;
                     previous_smux      = smux_active;
@@ -158,8 +151,8 @@ module test_stream_lock_qualifier {
         next_stamp  = 16'd0;
         rst.assert();
 
-        // 48kHz相当の1042clk周期。seedを含むframe番号を明示し、
-        // frame #33（32個目のstable interval）より前はlockしない。
+        // 48kHz相当の1042clk周期。
+        // seedを含むframe番号を明示し、frame #33（32個目のstable interval）より前はlockしない。
         frame_at(16'd1000);
         for i in 1..33 {
             frame_at(16'd1000 + (i as 16) * 16'd1042);
@@ -176,8 +169,8 @@ module test_stream_lock_qualifier {
         clk.next(1);
         $assert(locked == 1'b0, "lock must clear at 3P/2 timeout");
 
-        // 実周期48kHzの許容境界を確認する。1042±16clkは維持し、
-        // ±17clkはinterval不正として解除する。
+        // 実周期48kHzの許容境界を確認する。
+        // 1042±16clkは維持し、±17clkはinterval不正として解除する。
         rst.assert();
         smux_active = 1'b0;
         frame_at(16'd1000);
@@ -201,8 +194,8 @@ module test_stream_lock_qualifier {
         frame_at(timestamp + 16'd1025);
         $assert(locked == 1'b0, "48kHz -17clk jitter should unlock");
 
-        // 実周期44.1kHzの許容境界も同様に確認する。1134±17clkは
-        // 維持し、±18clkはinterval不正として解除する。
+        // 実周期44.1kHzの許容境界も同様に確認する。
+        // 1134±17clkは維持し、±18clkはinterval不正として解除する。
         rst.assert();
         smux_active = 1'b0;
         frame_at(16'd1000);

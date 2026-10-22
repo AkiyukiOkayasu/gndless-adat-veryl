@@ -56,15 +56,14 @@ module TimingTracker (
         } else if edge_pulse {
             // エッジでカウンタをリセット、最大値を更新
             edge_time_reg = cur_time;
-            // 入力停止中の長いgapは最大時間へ取り込まない。停止後の
-            // 再開エッジを同期期間として扱い、旧ストリームの閾値を維持する。
+            // 入力停止中の長いgapは最大時間へ取り込まない。
+            // 停止後の再開エッジを同期期間として扱い、旧ストリームの閾値を維持する。
             if cur_time <: 12'd1024 && cur_time[11:2] >: max_time {
                 max_time = cur_time[11:2];
             }
             cur_time = 12'd0;
         } else {
-            // wrapさせず飽和させることで、長い入力停止後の最初のエッジを
-            // 12bit wrap値（短いデータ間隔）と誤認しない。
+            // wrapさせず飽和させることで、長い入力停止後の最初のエッジを12bit wrap値（短いデータ間隔）と誤認しない。
             if cur_time <: 12'hFFF {
                 cur_time = cur_time + 12'd1;
             }
@@ -89,8 +88,7 @@ module TimingTracker (
             sync_mask = cur_time[11:2] <= threshold;
         } else if cur_time >= 12'd1024 {
             // 1kclk以上エッジが無い場合は、停止した入力を同期期間として扱う。
-            // cur_timeの12bit wrapで再開フレームの先頭をデータ期間と誤認し、
-            // FrameParserが古い途中状態から復帰不能になるのを防ぐ。
+            // cur_timeの12bit wrapで再開フレームの先頭をデータ期間と誤認し、FrameParserが古い途中状態から復帰不能になるのを防ぐ。
             sync_mask = 1'b0;
         }
     }

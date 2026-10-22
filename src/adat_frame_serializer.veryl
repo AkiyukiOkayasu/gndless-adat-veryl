@@ -2,9 +2,8 @@ import Types::AdatFamily;
 
 /// ADAT TXフレームビルダー兼シリアライザ
 ///
-/// `build`パルスで8ch 24bit PCMと`user_bits`から256bit ADATフレームを組み立て、
-/// MSB-first（bit 255 → bit 0）でシリアル出力する。フレームは単一の256bit shift registerに保持するため、
-/// 旧`FrameBuilder`＋`BitSerializer`の二重保持が不要になる。
+/// `build`パルスで8ch 24bit PCMと`user_bits`から256bit ADATフレームを組み立て、MSB-first（bit 255 → bit 0）でシリアル出力する。
+/// フレームは単一の256bit shift registerに保持するため、旧`FrameBuilder`＋`BitSerializer`の二重保持が不要になる。
 /// フレーム構造:
 ///   - SYNC: 10個の0 + separator (1)  [255:246] => 0000000000, [245] => 1
 ///   - User: 4bit + separator (1)     [244:241] => user_bits, [240] => 1
@@ -41,8 +40,8 @@ module AdatFrameSerializer #(
     bit_valid : output logic             , /// ビット出力有効ストローブ
     frame_done: output logic             , /// フレーム送信完了パルス
 ) {
-    // 剰余累積で1bit毎に消費するclock数を求める。1bitあたりの消費clockは
-    // clk_freq / bit_rate の丸めであり、その最大値を+2のマージンで上限とする。
+    // 剰余累積で1bit毎に消費するclock数を求める。
+    // 1bitあたりの消費clockは clk_freq / bit_rate の丸めであり、その最大値を+2のマージンで上限とする。
     // 例: 50MHz/48k系 では 50M/12.288M = 4.07 → 上限6。
     const MAX_CLOCKS_PER_BIT: u32 = CLK_FREQ / 11_289_600 + 2;
 

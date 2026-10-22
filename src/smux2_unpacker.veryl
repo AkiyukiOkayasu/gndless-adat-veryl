@@ -6,8 +6,7 @@ import gndless_fixedpoint::Q1_23;
 /// 1つのADATフレームを受けたサイクルで先行サンプルを出力し、次のシステムクロックで後続サンプルを出力する。
 /// したがって、`frame_valid` 1回に対して `sample_valid` は2クロック連続でHighになる。
 /// `frame_valid`は、後続サンプルの出力が終わるまで再度アサートしないこと。
-/// `channels`と`samples`は`FixedPointValue::<Q1_23>`境界であり、
-/// `AdatRx`の`channels`出力へ直接接続できる。
+/// `channels`と`samples`は`FixedPointValue::<Q1_23>`境界であり、`AdatRx`の`channels`出力へ直接接続できる。
 ///
 /// ```wavedrom
 /// {
