@@ -350,9 +350,14 @@ module test_adat_tx_rx_smux_recovery {
             }
             if recovery_seen && rx_valid && rx_locked {
                 recovery_valid = true;
-                for i in 0..8 {
-                    $assert(rx_channels[i].raw == tx_channels[i], "recovered S/MUX physical channel mismatch");
-                }
+                $assert(rx_channels[0].raw == tx_channels[0], "recovered S/MUX physical channel mismatch");
+                $assert(rx_channels[1].raw == tx_channels[1], "recovered S/MUX physical channel mismatch");
+                $assert(rx_channels[2].raw == tx_channels[2], "recovered S/MUX physical channel mismatch");
+                $assert(rx_channels[3].raw == tx_channels[3], "recovered S/MUX physical channel mismatch");
+                $assert(rx_channels[4].raw == tx_channels[4], "recovered S/MUX physical channel mismatch");
+                $assert(rx_channels[5].raw == tx_channels[5], "recovered S/MUX physical channel mismatch");
+                $assert(rx_channels[6].raw == tx_channels[6], "recovered S/MUX physical channel mismatch");
+                $assert(rx_channels[7].raw == tx_channels[7], "recovered S/MUX physical channel mismatch");
             }
         }
     }
