@@ -4,6 +4,9 @@
 
 ### Changed
 
+- READMEの依存記述を実際の`gndless_fixedpoint` 0.2.2依存へ修正した
+- `ADAT-SPEC.md`の176.4kHzの誤記を修正した
+- `FrameParser`のuser bit出力順を送信順との対応が分かる表現へ修正した
 - `gndless_fixedpoint` の package をトップレベル import し、`FixedPointValue` / `Q1_23` の完全修飾パスを短縮（Veryl 0.20.3 の namespace import 機能を使用）
 
 ## [0.4.0] - 2026-08-08

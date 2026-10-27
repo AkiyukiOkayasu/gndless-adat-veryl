@@ -5,7 +5,7 @@ ADAT opticalの8ch受信・送信とS/MUX2 pack/unpackのRTL実装です。
 ADATインターフェース自体の基本仕様（フレーム構造・物理仕様・UserBit・S/MUX）は
 [ADAT-SPEC.md](ADAT-SPEC.md) にまとめています。
 
-依存はVeryl stdのみ。
+依存はVeryl stdと`gndless_fixedpoint` 0.2.2です。公開sample境界は`FixedPointValue::<Q1_23>`です。
 
 ## 実機確認状況
 

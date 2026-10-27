@@ -33,7 +33,7 @@
 /// - `data` は24bit単一ベクタであり、byte order（エンディアン）に依存しない
 ///
 /// # ユーザーデータの並び
-/// `user_bits[0..3]` はデータ期間の先頭4bit（= 送信順のuser bit 1-4）をそのまま出力する。
+/// `user_bits[0]`が送信順1番目、`user_bits[1]`が2番目、`user_bits[2]`が3番目、`user_bits[3]`が4番目のuser bitになる。
 /// S/MUX2 (88.2/96kHz) は送信順2番目のuser bit (`user_bits[1]`) が1になる。
 /// S/MUX4 (176.4/192kHz) はuser bitが全0のためフラグを持たない (RME ADI-8 DSマニュアル "No S/MUX4 Flag")。
 module FrameParser (
